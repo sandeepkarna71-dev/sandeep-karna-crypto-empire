@@ -1,206 +1,592 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link } from "@tanstack/react-router";
-import { ArrowRight, Calendar, Play, TrendingUp } from "lucide-react";
-import { motion } from "motion/react";
-import { VlogCategory } from "../backend.d";
-import { useVlogPostsByCategory } from "../hooks/useQueries";
+import { Slider } from "@/components/ui/slider";
+import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  TrendingDown,
+  TrendingUp,
+  Zap,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { useAuth } from "../contexts/AuthContext";
 
-const SAMPLE_TRADING = [
-  {
-    id: 1,
-    title: "Starting My Crypto Trading Journey - Day 1",
-    description:
-      "Today I'm sharing my very first steps into the world of crypto trading. Starting with $1000, learning market fundamentals, and setting up my trading platform.",
-    date: "Mar 1, 2026",
-    tag: "Beginners",
-  },
-  {
-    id: 2,
-    title: "Bitcoin Breakout Analysis - Riding the Wave",
-    description:
-      "BTC just broke through the $65K resistance level. Here's my full technical analysis on where it's heading next and how I'm positioning my portfolio.",
-    date: "Mar 4, 2026",
-    tag: "Analysis",
-  },
-  {
-    id: 3,
-    title: "My First Profitable Trade - $340 in One Day",
-    description:
-      "After weeks of practice, I finally hit my first significant profit. Breaking down exactly what I did right and what I learned from this trade.",
-    date: "Mar 7, 2026",
-    tag: "Win",
-  },
-  {
-    id: 4,
-    title: "Altcoin Season Strategy - Which Coins I'm Watching",
-    description:
-      "With Bitcoin dominance dropping, it's time to look at altcoins. Here are the 5 projects I'm most bullish on for the coming months.",
-    date: "Mar 10, 2026",
-    tag: "Strategy",
-  },
-  {
-    id: 5,
-    title: "The Trade That Lost Me $500 - Painful Lessons",
-    description:
-      "Not every trade is a winner. This video covers a painful loss and the critical risk management mistakes I made. Learning from losses is how you grow.",
-    date: "Mar 12, 2026",
-    tag: "Lesson",
-  },
+const PAIRS = [
+  { symbol: "BTCUSDT", display: "BTC/USDT", short: "BTC" },
+  { symbol: "ETHUSDT", display: "ETH/USDT", short: "ETH" },
+  { symbol: "SOLUSDT", display: "SOL/USDT", short: "SOL" },
+  { symbol: "BNBUSDT", display: "BNB/USDT", short: "BNB" },
 ];
 
-function getYoutubeId(url: string) {
-  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
-  return m ? m[1] : null;
-}
-
 export function Trading() {
-  const { data: posts = [], isLoading } = useVlogPostsByCategory(
-    VlogCategory.trading,
-  );
+  const { user, isLoggedIn, updateUser } = useAuth();
+  const [activePair, setActivePair] = useState(PAIRS[0]);
+  const [currentPrice, setCurrentPrice] = useState<number>(0);
+  const [prevPrice, setPrevPrice] = useState<number>(0);
+  const [priceFlash, setPriceFlash] = useState<"up" | "down" | null>(null);
+  const [orderType, setOrderType] = useState<"Buy" | "Sell">("Buy");
+  const [amount, setAmount] = useState("");
+  const [leverage, setLeverage] = useState([1]);
+  const [executing, setExecuting] = useState(false);
+  const [showPairMenu, setShowPairMenu] = useState(false);
+  const priceRef = useRef(currentPrice);
+  const [openOrders, setOpenOrders] = useState<any[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("skce_open_orders") || "[]");
+    } catch {
+      return [];
+    }
+  });
 
-  const displayPosts = posts.length > 0 ? posts : null;
+  useEffect(() => {
+    async function fetchPrice() {
+      try {
+        const res = await fetch(
+          `https://api.binance.com/api/v3/ticker/price?symbol=${activePair.symbol}`,
+        );
+        const data = await res.json();
+        const newPrice = Number.parseFloat(data.price);
+        if (newPrice !== priceRef.current && priceRef.current !== 0) {
+          setPrevPrice(priceRef.current);
+          setPriceFlash(newPrice > priceRef.current ? "up" : "down");
+          setTimeout(() => setPriceFlash(null), 600);
+        }
+        priceRef.current = newPrice;
+        setCurrentPrice(newPrice);
+      } catch {
+        /* ignore */
+      }
+    }
+    fetchPrice();
+    const interval = setInterval(fetchPrice, 5000);
+    return () => clearInterval(interval);
+  }, [activePair.symbol]);
+
+  const [buyOrders, setBuyOrders] = useState<
+    { price: string; qty: string; total: string }[]
+  >([]);
+  const [sellOrders, setSellOrders] = useState<
+    { price: string; qty: string; total: string }[]
+  >([]);
+
+  useEffect(() => {
+    async function fetchDepth() {
+      try {
+        const res = await fetch(
+          `https://api.binance.com/api/v3/depth?symbol=${activePair.symbol}&limit=10`,
+        );
+        const data = await res.json();
+        const fmt = (arr: [string, string][]) =>
+          arr.map(([p, q]) => ({
+            price: Number(p).toFixed(2),
+            qty: Number(q).toFixed(4),
+            total: (Number(p) * Number(q)).toFixed(2),
+          }));
+        setBuyOrders(fmt(data.bids || []));
+        setSellOrders(fmt(data.asks || []));
+      } catch {
+        /* ignore */
+      }
+    }
+    fetchDepth();
+    const iv = setInterval(fetchDepth, 3000);
+    return () => clearInterval(iv);
+  }, [activePair.symbol]);
+
+  async function handleExecute() {
+    if (!isLoggedIn) {
+      toast.error("Please login first.");
+      return;
+    }
+    const amt = Number.parseFloat(amount);
+    if (!amt || amt <= 0) {
+      toast.error("Enter a valid amount.");
+      return;
+    }
+    if (!user || (user.balance || 0) < amt) {
+      toast.error("Insufficient balance.");
+      return;
+    }
+    setExecuting(true);
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Trading result: 60% win, 40% loss
+    const win = Math.random() < 0.6;
+    const pct = (Math.random() * 0.08 + 0.01) * leverage[0];
+    const pnl = win ? amt * pct : -(amt * pct);
+    const newBalance = Math.max(0, (user.balance || 0) + pnl);
+
+    updateUser({ balance: newBalance });
+
+    // Save to open orders
+    const order = {
+      id: `ord_${Date.now()}`,
+      pair: activePair.display,
+      type: orderType,
+      amount: amt,
+      price: currentPrice,
+      status: "Filled",
+      pnl: pnl.toFixed(2),
+      timestamp: Date.now(),
+    };
+    const orders = (() => {
+      try {
+        return JSON.parse(localStorage.getItem("skce_open_orders") || "[]");
+      } catch {
+        return [];
+      }
+    })();
+    const updated = [order, ...orders].slice(0, 50);
+    localStorage.setItem("skce_open_orders", JSON.stringify(updated));
+    setOpenOrders(updated);
+
+    if (win) {
+      toast.success(`🚀 Trade Executed! +$${pnl.toFixed(2)} USDT profit!`);
+    } else {
+      toast.error(
+        `📉 Trade closed at loss: -$${Math.abs(pnl).toFixed(2)} USDT`,
+      );
+    }
+    setAmount("");
+    setExecuting(false);
+  }
+
+  const tvSymbol = `BINANCE:${activePair.symbol}`;
 
   return (
-    <div className="min-h-screen bg-mesh pt-20">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-12"
-        >
-          <h1 className="font-display text-4xl font-bold mb-3">
-            Trading <span className="gold-gradient">Journey</span>
-          </h1>
-          <p className="text-foreground/50">
-            Follow my day-to-day trading experiences, analysis, and lessons
-            learned
-          </p>
-        </motion.div>
-
-        {/* Stats bar */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className="grid grid-cols-3 gap-4 mb-12"
-        >
-          {[
-            { label: "Total Trades", value: "147" },
-            { label: "Win Rate", value: "68%" },
-            { label: "Best Month", value: "+$2,400" },
-          ].map((s) => (
-            <div
-              key={s.label}
-              className="glass-card rounded-xl p-4 text-center"
-            >
-              <div className="font-display text-2xl font-bold gold-gradient">
-                {s.value}
-              </div>
-              <div className="text-xs text-foreground/40 mt-1">{s.label}</div>
-            </div>
-          ))}
-        </motion.div>
-
-        {/* Timeline */}
+    <div className="min-h-screen pt-16" style={{ background: "#0a0a0a" }}>
+      {/* Top Bar */}
+      <div
+        className="border-b flex items-center gap-4 px-4 py-2"
+        style={{
+          borderColor: "rgba(255,215,0,0.1)",
+          background: "rgba(15,15,15,0.9)",
+        }}
+      >
+        {/* Pair selector */}
         <div className="relative">
-          <div className="absolute left-6 top-0 bottom-0 w-px bg-gradient-to-b from-gold/40 via-gold/20 to-transparent" />
-          <div className="space-y-8">
-            {isLoading ? (
-              <div className="text-center py-10 text-foreground/40">
-                Loading trading posts...
-              </div>
-            ) : (
-              (displayPosts || SAMPLE_TRADING).map((post, i) => {
-                const isBackend = "videoUrl" in post;
-                const videoId = isBackend
-                  ? getYoutubeId((post as any).videoUrl)
-                  : null;
-                const date = isBackend
-                  ? new Date(
-                      Number((post as any).createdAt) / 1000000,
-                    ).toLocaleDateString()
-                  : (post as any).date;
-                const title = post.title;
-                const description = post.description;
-                const tag = isBackend ? "Trading" : (post as any).tag;
-
-                return (
-                  <motion.div
-                    key={String(post.id)}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.08 }}
-                    className="relative pl-16"
+          <button
+            type="button"
+            onClick={() => setShowPairMenu(!showPairMenu)}
+            data-ocid="trading.select"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold text-white hover:bg-white/5 transition-colors"
+            style={{ border: "1px solid rgba(255,215,0,0.2)" }}
+          >
+            <span style={{ color: "#FFD700" }}>{activePair.display}</span>
+            <ChevronDown className="w-3 h-3 text-white/40" />
+          </button>
+          <AnimatePresence>
+            {showPairMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -5 }}
+                className="absolute top-full left-0 mt-1 rounded-xl overflow-hidden z-50 w-40"
+                style={{
+                  background: "rgba(15,15,15,0.98)",
+                  border: "1px solid rgba(255,215,0,0.2)",
+                }}
+              >
+                {PAIRS.map((p) => (
+                  <button
+                    key={p.symbol}
+                    type="button"
+                    onClick={() => {
+                      setActivePair(p);
+                      setShowPairMenu(false);
+                      priceRef.current = 0;
+                    }}
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                      p.symbol === activePair.symbol
+                        ? "text-[#FFD700]"
+                        : "text-white/70 hover:text-white hover:bg-white/5"
+                    }`}
                   >
-                    <div className="absolute left-4 top-5 w-4 h-4 rounded-full bg-gradient-to-br from-gold to-orange-brand border-2 border-navy flex items-center justify-center">
-                      <TrendingUp className="w-2 h-2 text-navy" />
-                    </div>
-                    <div className="glass-card glass-card-hover rounded-xl p-5 transition-all">
-                      <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
-                        <div className="flex items-center gap-2">
-                          <Badge className="bg-gold/10 text-gold border border-gold/20 text-xs">
-                            {tag}
-                          </Badge>
-                          <span className="text-xs text-foreground/40 flex items-center gap-1">
-                            <Calendar className="w-3 h-3" /> {date}
-                          </span>
-                        </div>
-                      </div>
-                      <h3 className="font-display font-bold text-lg text-foreground mb-2">
-                        {title}
-                      </h3>
-                      <p className="text-sm text-foreground/60 leading-relaxed">
-                        {description}
-                      </p>
-                      {videoId && (
-                        <div className="mt-4 rounded-lg overflow-hidden aspect-video">
-                          <iframe
-                            src={`https://www.youtube.com/embed/${videoId}`}
-                            className="w-full h-full"
-                            allowFullScreen
-                            title={title}
-                          />
-                        </div>
-                      )}
-                      {!videoId && isBackend && (post as any).videoUrl && (
-                        <a
-                          href={(post as any).videoUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 mt-3 text-sm text-gold hover:text-gold/70 transition-colors"
-                        >
-                          <Play className="w-4 h-4" /> Watch Video
-                        </a>
-                      )}
-                    </div>
-                  </motion.div>
-                );
-              })
+                    {p.display}
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Live price */}
+        <div
+          className={`font-mono font-bold text-lg transition-all rounded px-1 ${
+            priceFlash === "up"
+              ? "price-flash-green"
+              : priceFlash === "down"
+                ? "price-flash-red"
+                : ""
+          }`}
+          style={{
+            color:
+              priceFlash === "up"
+                ? "#00FF88"
+                : priceFlash === "down"
+                  ? "#FF3366"
+                  : "#FFD700",
+          }}
+        >
+          {currentPrice > 0
+            ? `$${currentPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : "Loading..."}
+        </div>
+
+        {currentPrice > 0 && prevPrice > 0 && (
+          <div
+            className={`text-xs flex items-center gap-1 ${currentPrice >= prevPrice ? "text-[#00FF88]" : "text-[#FF3366]"}`}
+          >
+            {currentPrice >= prevPrice ? (
+              <TrendingUp className="w-3 h-3" />
+            ) : (
+              <TrendingDown className="w-3 h-3" />
+            )}
+          </div>
+        )}
+
+        <div
+          className="ml-auto flex items-center gap-1 text-xs"
+          style={{ color: "#00FF88" }}
+        >
+          <Activity className="w-3 h-3" />
+          <span className="animate-pulse">LIVE</span>
+        </div>
+      </div>
+
+      <div className="flex h-[calc(100vh-120px)]">
+        {/* TradingView Chart */}
+        <div className="flex-1 min-w-0">
+          <iframe
+            key={tvSymbol}
+            src={`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${tvSymbol}&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=000000&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&showpopupbutton=1&studies_overrides=%7B%7D&overrides=%7B%22mainSeriesProperties.candleStyle.upColor%22%3A%22%2300FF88%22%2C%22mainSeriesProperties.candleStyle.downColor%22%3A%22%23FF3366%22%7D&enabled_features=[]&disabled_features=[]&locale=en`}
+            className="w-full h-full border-0"
+            title="TradingView Chart"
+            allowFullScreen
+          />
+        </div>
+
+        {/* Right sidebar: Order book + Trade panel */}
+        <div
+          className="w-72 flex flex-col shrink-0 border-l"
+          style={{
+            borderColor: "rgba(255,215,0,0.1)",
+            background: "rgba(10,10,10,0.95)",
+          }}
+        >
+          {/* Order Book */}
+          <div className="flex-1 overflow-hidden">
+            <div
+              className="px-3 py-2 border-b"
+              style={{ borderColor: "rgba(255,255,255,0.05)" }}
+            >
+              <span className="text-xs font-bold text-white/60 uppercase tracking-wider">
+                Order Book
+              </span>
+            </div>
+            <div className="px-3 py-1">
+              <div className="grid grid-cols-3 text-[10px] text-white/30 py-1 uppercase tracking-wider">
+                <span>Price (USDT)</span>
+                <span className="text-center">Qty</span>
+                <span className="text-right">Total</span>
+              </div>
+            </div>
+            {/* Sell orders (red) */}
+            <div className="px-3 space-y-px">
+              {sellOrders
+                .slice()
+                .reverse()
+                .map((o, i) => (
+                  <div
+                    key={`sell-${String(i)}`}
+                    className="grid grid-cols-3 text-xs py-0.5 relative"
+                  >
+                    <div
+                      className="absolute inset-0 right-auto"
+                      style={{
+                        width: `${(8 - i) * 8}%`,
+                        background: "rgba(255,51,102,0.08)",
+                      }}
+                    />
+                    <span
+                      className="font-mono relative z-10"
+                      style={{ color: "#FF3366" }}
+                    >
+                      {o.price}
+                    </span>
+                    <span className="text-center font-mono relative z-10 text-white/50">
+                      {o.qty}
+                    </span>
+                    <span className="text-right font-mono relative z-10 text-white/30">
+                      {o.total}
+                    </span>
+                  </div>
+                ))}
+            </div>
+
+            {/* Mid price */}
+            <div className="px-3 py-2 text-center">
+              <span
+                className="font-mono font-bold text-sm"
+                style={{ color: "#FFD700" }}
+              >
+                {currentPrice > 0 ? currentPrice.toFixed(2) : "---"}
+              </span>
+            </div>
+
+            {/* Buy orders (green) */}
+            <div className="px-3 space-y-px">
+              {buyOrders.map((o, i) => (
+                <div
+                  key={`buy-${String(i)}`}
+                  className="grid grid-cols-3 text-xs py-0.5 relative"
+                >
+                  <div
+                    className="absolute inset-0 right-auto"
+                    style={{
+                      width: `${(8 - i) * 8}%`,
+                      background: "rgba(0,255,136,0.06)",
+                    }}
+                  />
+                  <span
+                    className="font-mono relative z-10"
+                    style={{ color: "#00FF88" }}
+                  >
+                    {o.price}
+                  </span>
+                  <span className="text-center font-mono relative z-10 text-white/50">
+                    {o.qty}
+                  </span>
+                  <span className="text-right font-mono relative z-10 text-white/30">
+                    {o.total}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Trade Panel */}
+          <div
+            className="border-t p-3 space-y-3"
+            style={{ borderColor: "rgba(255,215,0,0.1)" }}
+          >
+            {/* Buy/Sell toggle */}
+            <div
+              className="grid grid-cols-2 rounded-lg overflow-hidden"
+              style={{ border: "1px solid rgba(255,255,255,0.08)" }}
+            >
+              <button
+                type="button"
+                onClick={() => setOrderType("Buy")}
+                data-ocid="trading.toggle"
+                className="py-2 text-sm font-bold transition-all"
+                style={{
+                  background:
+                    orderType === "Buy"
+                      ? "linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,255,136,0.1))"
+                      : "transparent",
+                  color:
+                    orderType === "Buy" ? "#00FF88" : "rgba(255,255,255,0.4)",
+                  borderRight: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <ArrowUp className="w-3 h-3 inline mr-1" />
+                Buy
+              </button>
+              <button
+                type="button"
+                onClick={() => setOrderType("Sell")}
+                data-ocid="trading.toggle"
+                className="py-2 text-sm font-bold transition-all"
+                style={{
+                  background:
+                    orderType === "Sell"
+                      ? "linear-gradient(135deg, rgba(255,51,102,0.2), rgba(255,51,102,0.1))"
+                      : "transparent",
+                  color:
+                    orderType === "Sell" ? "#FF3366" : "rgba(255,255,255,0.4)",
+                }}
+              >
+                <ArrowDown className="w-3 h-3 inline mr-1" />
+                Sell
+              </button>
+            </div>
+
+            <div>
+              <div className="text-[10px] text-white/40 uppercase tracking-wider mb-1">
+                Amount (USDT)
+              </div>
+              <input
+                type="number"
+                data-ocid="trading.input"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-full h-9 rounded-lg px-3 text-sm font-mono text-white bg-white/5 border border-white/10 focus:border-[#FFD700]/40 focus:outline-none transition-all"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] text-white/40 uppercase tracking-wider">
+                  Leverage
+                </div>
+                <span
+                  className="text-xs font-bold"
+                  style={{ color: "#FFD700" }}
+                >
+                  {leverage[0]}x
+                </span>
+              </div>
+              <Slider
+                value={leverage}
+                onValueChange={setLeverage}
+                min={1}
+                max={20}
+                step={1}
+                className="w-full"
+              />
+            </div>
+
+            {isLoggedIn && user && (
+              <div className="text-[10px] text-white/30 flex justify-between">
+                <span>Balance</span>
+                <span className="font-mono" style={{ color: "#FFD700" }}>
+                  ${(user.balance || 0).toFixed(2)}
+                </span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleExecute}
+              data-ocid="trading.submit_button"
+              disabled={executing || !isLoggedIn}
+              className={`w-full h-10 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
+                orderType === "Buy" ? "" : ""
+              }`}
+              style={{
+                background: executing
+                  ? "rgba(255,255,255,0.1)"
+                  : orderType === "Buy"
+                    ? "linear-gradient(135deg, #00FF88, #00cc66)"
+                    : "linear-gradient(135deg, #FF3366, #cc0033)",
+                color: "#0a0a0a",
+                boxShadow:
+                  orderType === "Buy"
+                    ? "0 0 15px rgba(0,255,136,0.3)"
+                    : "0 0 15px rgba(255,51,102,0.3)",
+              }}
+            >
+              {executing ? (
+                <>
+                  <Zap className="w-4 h-4 animate-pulse" /> Executing...
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4" /> {orderType} {activePair.short}
+                </>
+              )}
+            </button>
+
+            {!isLoggedIn && (
+              <p className="text-[10px] text-center text-white/30">
+                <a
+                  href="/login"
+                  className="underline"
+                  style={{ color: "#FFD700" }}
+                >
+                  Login
+                </a>{" "}
+                to start trading
+              </p>
             )}
           </div>
         </div>
-
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="text-center mt-16 glass-card rounded-2xl p-10"
-        >
-          <TrendingUp className="w-12 h-12 mx-auto mb-4 text-gold/50" />
-          <h3 className="font-display text-2xl font-bold mb-3">
-            Join the Trading Journey
-          </h3>
-          <p className="text-foreground/50 mb-6">
-            Watch daily vlogs and live trading sessions
-          </p>
-          <Link to="/vlog">
-            <Button className="bg-gradient-to-r from-gold to-orange-brand text-navy font-bold">
-              Watch Vlogs <ArrowRight className="w-4 h-4 ml-2" />
-            </Button>
-          </Link>
-        </motion.div>
       </div>
+      {/* Open Orders Section */}
+      {openOrders.length > 0 && (
+        <div
+          className="border-t px-4 py-4"
+          style={{
+            borderColor: "rgba(255,215,0,0.1)",
+            background: "rgba(10,10,10,0.9)",
+          }}
+        >
+          <h3 className="text-sm font-bold mb-3" style={{ color: "#FFD700" }}>
+            Recent Orders
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr style={{ color: "rgba(255,255,255,0.3)" }}>
+                  <th className="text-left pb-2">Pair</th>
+                  <th className="text-left pb-2">Type</th>
+                  <th className="text-right pb-2">Amount</th>
+                  <th className="text-right pb-2">Price</th>
+                  <th className="text-right pb-2">PNL</th>
+                  <th className="text-right pb-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openOrders.slice(0, 10).map((order, idx) => (
+                  <tr
+                    key={order.id}
+                    data-ocid={`trading.order.item.${idx + 1}`}
+                    style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                  >
+                    <td
+                      className="py-1.5 font-mono"
+                      style={{ color: "#FFD700" }}
+                    >
+                      {order.pair}
+                    </td>
+                    <td className="py-1.5">
+                      <span
+                        style={{
+                          color: order.type === "Buy" ? "#00FF88" : "#FF3366",
+                        }}
+                      >
+                        {order.type}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right font-mono text-white/70">
+                      ${order.amount.toFixed(2)}
+                    </td>
+                    <td className="py-1.5 text-right font-mono text-white/70">
+                      ${Number(order.price).toFixed(2)}
+                    </td>
+                    <td
+                      className="py-1.5 text-right font-mono"
+                      style={{
+                        color: Number(order.pnl) >= 0 ? "#00FF88" : "#FF3366",
+                      }}
+                    >
+                      {Number(order.pnl) >= 0 ? "+" : ""}
+                      {order.pnl}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      <span
+                        className="px-2 py-0.5 rounded-full text-[10px]"
+                        style={{
+                          background: "rgba(0,255,136,0.1)",
+                          color: "#00FF88",
+                        }}
+                      >
+                        {order.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

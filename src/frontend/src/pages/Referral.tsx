@@ -36,19 +36,19 @@ export function Referral() {
         {
           username: "user_joined_1",
           date: "2026-03-10",
-          bonus: 5,
+          bonus: 1,
           status: "credited",
         },
         {
           username: "user_joined_2",
           date: "2026-03-12",
-          bonus: 5,
+          bonus: 1,
           status: "credited",
         },
         {
           username: "user_joined_3",
           date: "2026-03-14",
-          bonus: 5,
+          bonus: 1,
           status: "pending",
         },
       ]
@@ -69,7 +69,7 @@ export function Referral() {
             Invite & Earn
           </h1>
           <p className="text-muted-foreground">
-            Earn $5 bonus for every friend you refer who joins Crypto Empire!
+            Earn $1 bonus for every friend you refer who joins Crypto Empire!
           </p>
         </motion.div>
 
@@ -110,7 +110,7 @@ export function Referral() {
                   value: `$${referralHistory.filter((r) => r.status === "credited").length * 5}`,
                   icon: Gift,
                 },
-                { label: "Bonus Per Referral", value: "$5", icon: Share2 },
+                { label: "Bonus Per Referral", value: "$1", icon: Share2 },
               ].map((s) => {
                 const Icon = s.icon;
                 return (
@@ -200,8 +200,8 @@ export function Referral() {
                   },
                   {
                     step: "3",
-                    title: "Earn $5 Bonus",
-                    desc: "$5 credited to your balance instantly",
+                    title: "Earn $1 Bonus",
+                    desc: "$1 credited to your balance instantly",
                   },
                 ].map((s) => (
                   <div

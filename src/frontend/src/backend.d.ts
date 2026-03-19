@@ -161,4 +161,16 @@ export interface backendInterface {
     updateAd(id: bigint, title: string, description: string, imageUrl: string, linkUrl: string, isActive: boolean): Promise<void>;
     updateAnnouncement(id: bigint, title: string, content: string): Promise<void>;
     updateVlogPost(id: bigint, title: string, description: string, videoUrl: string, thumbnailUrl: string, category: VlogCategory): Promise<void>;
+    // Public anonymous-friendly functions
+    registerUserPublic(username: string, email: string, fullName: string, joinDate: bigint, referralCode: string, referredBy: [] | [string]): Promise<void>;
+    getAllUsersPublic(): Promise<Array<UserInfo>>;
+    getAllDepositsPublic(): Promise<Array<DepositRequest>>;
+    getAllWithdrawalsPublic(): Promise<Array<WithdrawalRequest>>;
+    submitDepositPublic(username: string, currency: string, amount: string, txHash: string): Promise<void>;
+    submitWithdrawalPublic(username: string, amount: bigint, currency: string, walletAddress: string): Promise<void>;
+    approveDepositAdmin(id: bigint, adminPw: string): Promise<void>;
+    rejectDepositAdmin(id: bigint, adminPw: string): Promise<void>;
+    approveWithdrawalAdmin(id: bigint, adminPw: string): Promise<void>;
+    rejectWithdrawalAdmin(id: bigint, adminPw: string): Promise<void>;
+    getUserBalancePublic(username: string): Promise<bigint>;
 }

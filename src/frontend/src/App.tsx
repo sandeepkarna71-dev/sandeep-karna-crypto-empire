@@ -8,22 +8,30 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { ThemeProvider } from "next-themes";
+import { AIAssistant } from "./components/AIAssistant";
 import { Footer } from "./components/Footer";
 import { Navbar } from "./components/Navbar";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Admin } from "./pages/Admin";
 import { AdminDashboard } from "./pages/AdminDashboard";
+import { Blog } from "./pages/Blog";
+import { Convert } from "./pages/Convert";
 import { Crypto } from "./pages/Crypto";
 import { Earn } from "./pages/Earn";
+import { FutureTrading } from "./pages/FutureTrading";
 import { Home } from "./pages/Home";
+import { KYC } from "./pages/KYC";
 import { Leaderboard } from "./pages/Leaderboard";
 import { Login } from "./pages/Login";
+import { MemeCoinTrading } from "./pages/MemeCoinTrading";
 import { News } from "./pages/News";
-import { Plans } from "./pages/Plans";
+import { P2P } from "./pages/P2P";
+import { Positions } from "./pages/Positions";
 import { Profile } from "./pages/Profile";
 import { Referral } from "./pages/Referral";
 import { Signals } from "./pages/Signals";
 import { Signup } from "./pages/Signup";
+import { TradeFi } from "./pages/TradeFi";
 import { Trading } from "./pages/Trading";
 import { Vlog } from "./pages/Vlog";
 import { Wallet } from "./pages/Wallet";
@@ -40,16 +48,27 @@ const rootRoute = createRootRoute({
         <Outlet />
       </main>
       <Footer />
+      <AIAssistant />
     </div>
   ),
 });
 
-const routes = [
+const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/", component: Home }),
   createRoute({
     getParentRoute: () => rootRoute,
-    path: "/plans",
-    component: Plans,
+    path: "/blog",
+    component: Blog,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/meme-trading",
+    component: MemeCoinTrading,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/futures",
+    component: FutureTrading,
   }),
   createRoute({
     getParentRoute: () => rootRoute,
@@ -108,8 +127,38 @@ const routes = [
   }),
   createRoute({
     getParentRoute: () => rootRoute,
+    path: "/register",
+    component: Signup,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
     path: "/profile",
     component: Profile,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/p2p",
+    component: P2P,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/kyc",
+    component: KYC,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/positions",
+    component: Positions,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/convert",
+    component: Convert,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/tradefi",
+    component: TradeFi,
   }),
   createRoute({
     getParentRoute: () => rootRoute,
@@ -121,9 +170,8 @@ const routes = [
     path: "/admin/dashboard",
     component: AdminDashboard,
   }),
-];
+]);
 
-const routeTree = rootRoute.addChildren(routes);
 const router = createRouter({ routeTree });
 
 declare module "@tanstack/react-router" {
@@ -138,7 +186,7 @@ export default function App() {
       attribute="class"
       defaultTheme="dark"
       enableSystem={false}
-      storageKey="skl-theme"
+      storageKey="skce-theme"
     >
       <QueryClientProvider client={queryClient}>
         <AuthProvider>

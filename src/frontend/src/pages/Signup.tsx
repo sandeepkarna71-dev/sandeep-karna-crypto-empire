@@ -30,7 +30,7 @@ export function Signup() {
     if (!form.username.trim() || form.username.length < 3)
       e.username = "Username must be at least 3 characters";
     if (!/^[a-zA-Z0-9_]+$/.test(form.username))
-      e.username = "Username can only contain letters, numbers, underscores";
+      e.username = "Username: letters, numbers, underscores only";
     if (!form.email.includes("@")) e.email = "Valid email is required";
     if (form.password.length < 6)
       e.password = "Password must be at least 6 characters";
@@ -62,51 +62,101 @@ export function Signup() {
     }
   }
 
-  const field = (id: string, label: string, extra: object, errKey: string) => (
-    <div className="space-y-1.5">
-      <Label htmlFor={id} className="text-foreground/80 text-sm font-medium">
-        {label}
-      </Label>
-      <Input
-        id={id}
-        {...extra}
-        className="bg-background/50 border-border/60 focus:border-gold/50 h-11"
-      />
-      {errors[errKey] && (
-        <p data-ocid="signup.error_state" className="text-red-400 text-xs">
-          {errors[errKey]}
-        </p>
-      )}
-    </div>
-  );
+  function field(id: string, label: string, extra: object, errKey: string) {
+    return (
+      <div className="space-y-1.5">
+        <Label
+          htmlFor={id}
+          className="text-white/70 text-xs font-semibold uppercase tracking-wider"
+        >
+          {label}
+        </Label>
+        <Input
+          id={id}
+          {...extra}
+          className="h-11 bg-white/5 border-white/10 text-white placeholder:text-white/25 focus:border-[#FFD700]/50 focus:ring-[#FFD700]/20 transition-all"
+        />
+        {errors[errKey] && (
+          <p data-ocid="signup.error_state" className="text-[#FF3366] text-xs">
+            {errors[errKey]}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-mesh flex items-center justify-center px-4 py-20">
+    <div
+      className="min-h-screen flex items-center justify-center px-4 py-24 relative overflow-hidden"
+      style={{ background: "#0a0a0a" }}
+    >
+      <div className="absolute inset-0 bg-grid opacity-50" />
+      <div
+        className="absolute top-1/3 right-1/4 w-80 h-80 rounded-full pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(circle, rgba(0,240,255,0.05) 0%, transparent 70%)",
+          filter: "blur(40px)",
+        }}
+      />
+      <div
+        className="absolute bottom-1/3 left-1/4 w-80 h-80 rounded-full pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(circle, rgba(255,215,0,0.05) 0%, transparent 70%)",
+          filter: "blur(40px)",
+        }}
+      />
+
       <motion.div
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="w-full max-w-md"
+        className="w-full max-w-md relative z-10"
       >
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-gold to-orange-brand mb-4">
-            <TrendingUp className="w-8 h-8 text-navy" />
-          </div>
-          <h1 className="font-display text-3xl font-bold gold-gradient mb-1">
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: "spring", stiffness: 200, delay: 0.1 }}
+            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+            style={{
+              background: "linear-gradient(135deg, #FFD700, #FFA500)",
+              boxShadow: "0 0 30px rgba(255,215,0,0.4)",
+            }}
+          >
+            <TrendingUp className="w-8 h-8 text-black" />
+          </motion.div>
+          <h1 className="font-display text-3xl font-bold text-white mb-1">
             Create Account
           </h1>
-          <p className="text-muted-foreground text-sm">
-            Join thousands earning daily on Crypto Empire
+          <p className="text-white/40 text-sm">
+            Join thousands earning daily on SKCE
           </p>
         </div>
 
-        <div className="glass-card rounded-2xl p-8">
+        <div
+          className="rounded-2xl p-8"
+          style={{
+            background: "rgba(255,255,255,0.04)",
+            backdropFilter: "blur(24px)",
+            WebkitBackdropFilter: "blur(24px)",
+            border: "1px solid rgba(0,240,255,0.15)",
+            boxShadow:
+              "0 0 40px rgba(0,240,255,0.06), 0 20px 60px rgba(0,0,0,0.5)",
+          }}
+        >
           <form onSubmit={handleSubmit} noValidate>
             <div className="space-y-4">
               {errors.general && (
                 <div
                   data-ocid="signup.error_state"
-                  className="bg-destructive/10 border border-destructive/30 text-red-400 text-sm rounded-lg px-4 py-3"
+                  className="rounded-lg px-4 py-3 text-sm"
+                  style={{
+                    background: "rgba(255,51,102,0.1)",
+                    border: "1px solid rgba(255,51,102,0.3)",
+                    color: "#FF3366",
+                  }}
                 >
                   {errors.general}
                 </div>
@@ -160,7 +210,7 @@ export function Signup() {
               <div className="space-y-1.5">
                 <Label
                   htmlFor="password"
-                  className="text-foreground/80 text-sm font-medium"
+                  className="text-white/70 text-xs font-semibold uppercase tracking-wider"
                 >
                   Password
                 </Label>
@@ -175,12 +225,12 @@ export function Signup() {
                     onChange={(e) =>
                       setForm({ ...form, password: e.target.value })
                     }
-                    className="bg-background/50 border-border/60 focus:border-gold/50 h-11 pr-10"
+                    className="h-11 bg-white/5 border-white/10 text-white placeholder:text-white/25 focus:border-[#FFD700]/50 focus:ring-[#FFD700]/20 pr-10 transition-all"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPw(!showPw)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/70 transition-colors"
                     tabIndex={-1}
                   >
                     {showPw ? (
@@ -193,7 +243,7 @@ export function Signup() {
                 {errors.password && (
                   <p
                     data-ocid="signup.error_state"
-                    className="text-red-400 text-xs"
+                    className="text-[#FF3366] text-xs"
                   >
                     {errors.password}
                   </p>
@@ -220,7 +270,7 @@ export function Signup() {
                 "Referral Code (Optional)",
                 {
                   type: "text",
-                  placeholder: "Enter referral code for bonus",
+                  placeholder: "Enter referral code for $1 bonus",
                   "data-ocid": "signup.input",
                   value: form.referralCode,
                   onChange: (e: any) =>
@@ -229,32 +279,33 @@ export function Signup() {
                 "referralCode",
               )}
 
-              <Button
+              <button
                 type="submit"
                 data-ocid="signup.submit_button"
                 disabled={loading}
-                className="w-full h-11 bg-gradient-to-r from-gold to-orange-brand text-navy font-bold text-sm hover:opacity-90 transition-opacity mt-2"
+                className="w-full h-11 rounded-lg font-bold text-sm glow-btn-yellow disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-2 transition-all"
               >
                 {loading ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating
+                    <Loader2 className="w-4 h-4 animate-spin" /> Creating
                     Account...
                   </>
                 ) : (
                   <>
-                    <UserPlus className="w-4 h-4 mr-2" /> Create Account
+                    <UserPlus className="w-4 h-4" /> Join SKCE — Free
                   </>
                 )}
-              </Button>
+              </button>
             </div>
           </form>
 
-          <div className="mt-6 text-center text-sm text-muted-foreground">
+          <div className="mt-6 text-center text-sm text-white/40">
             Already have an account?{" "}
             <Link
               to="/login"
               data-ocid="signup.link"
-              className="text-gold hover:text-gold/80 font-medium transition-colors"
+              className="font-semibold hover:opacity-80 transition-opacity"
+              style={{ color: "#FFD700" }}
             >
               Sign In
             </Link>

@@ -1,240 +1,177 @@
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Calendar, Play, Tag, Video } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { CheckCircle, Play, Video } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
-import { VlogCategory } from "../backend.d";
-import { useVlogPosts } from "../hooks/useQueries";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
-const SAMPLE_VLOGS = [
-  {
-    id: 1,
-    title: "My Crypto Trading Journey - Week 1 Recap",
-    description:
-      "Sharing everything from my first week of serious crypto trading. The highs, the lows, and the lessons learned along the way.",
-    thumbnailUrl:
-      "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=400",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    category: VlogCategory.trading,
-    createdAt: BigInt(Date.now() * 1000000),
-  },
-  {
-    id: 2,
-    title: "Bitcoin Analysis: Why I'm Bullish Right Now",
-    description:
-      "Deep dive into Bitcoin's current chart patterns and why I believe we're heading for new all-time highs.",
-    thumbnailUrl:
-      "https://images.unsplash.com/photo-1518546305927-5a555bb7020d?w=400",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    category: VlogCategory.vlog,
-    createdAt: BigInt((Date.now() - 86400000) * 1000000),
-  },
-  {
-    id: 3,
-    title: "🔥 Bybit Promotion - 30% Bonus on First Deposit!",
-    description:
-      "Exclusive partnership deal! Use my link to get a 30% bonus on your first deposit. Limited time offer for my subscribers.",
-    thumbnailUrl:
-      "https://images.unsplash.com/photo-1639762681485-074b7f938ba0?w=400",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    category: VlogCategory.promo,
-    createdAt: BigInt((Date.now() - 172800000) * 1000000),
-  },
-  {
-    id: 4,
-    title: "Day in the Life - Trading From Home",
-    description:
-      "Follow me through my entire trading day, from morning research to executing trades and reviewing results in the evening.",
-    thumbnailUrl:
-      "https://images.unsplash.com/photo-1620321023374-d1a68fbc720d?w=400",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    category: VlogCategory.vlog,
-    createdAt: BigInt((Date.now() - 259200000) * 1000000),
-  },
-  {
-    id: 5,
-    title: "Top 3 Altcoins for Q2 2026",
-    description:
-      "My research-backed picks for the best altcoin opportunities in the next quarter. Complete with entry points and targets.",
-    thumbnailUrl:
-      "https://images.unsplash.com/photo-1605792657660-596af9009e82?w=400",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    category: VlogCategory.trading,
-    createdAt: BigInt((Date.now() - 345600000) * 1000000),
-  },
-  {
-    id: 6,
-    title: "Binance Exclusive: Get $100 Free + 20% Fee Discount",
-    description:
-      "My exclusive Binance referral gives you $100 in trading credits AND 20% off all trading fees. Don't miss this!",
-    thumbnailUrl:
-      "https://images.unsplash.com/photo-1646953281231-1f2f5b70bcc4?w=400",
-    videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    category: VlogCategory.promo,
-    createdAt: BigInt((Date.now() - 432000000) * 1000000),
-  },
-];
-
-function getYoutubeId(url: string) {
-  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
-  return m ? m[1] : null;
+function loadLS<T>(key: string, def: T): T {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null") ?? def;
+  } catch {
+    return def;
+  }
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  all: "All",
-  [VlogCategory.vlog]: "Vlog",
-  [VlogCategory.trading]: "Trading",
-  [VlogCategory.promo]: "Promo",
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  [VlogCategory.vlog]: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-  [VlogCategory.trading]: "bg-gold/10 text-gold border-gold/20",
-  [VlogCategory.promo]:
-    "bg-orange-brand/10 text-orange-brand border-orange-brand/20",
-};
-
 export function Vlog() {
-  const [activeTab, setActiveTab] = useState("all");
-  const { data: posts = [], isLoading } = useVlogPosts();
-  const [expandedVideo, setExpandedVideo] = useState<string | null>(null);
+  const [vlogs, setVlogs] = useState<any[]>([]);
+  const [watched, setWatched] = useState<number[]>([]);
+  const [claimed, setClaimed] = useState<number[]>([]);
 
-  const allPosts = posts.length > 0 ? posts : SAMPLE_VLOGS;
-  const filtered =
-    activeTab === "all"
-      ? allPosts
-      : allPosts.filter((p) => String(p.category) === activeTab);
+  useEffect(() => {
+    setVlogs(loadLS("sce_admin_vlogs", []));
+    setWatched(loadLS("sce_watched_vlogs", []));
+    setClaimed(loadLS("sce_claimed_vlog_rewards", []));
+  }, []);
+
+  function handleWatch(vlog: any) {
+    if (vlog.videoUrl) {
+      window.open(vlog.videoUrl, "_blank");
+    }
+    if (!watched.includes(vlog.id)) {
+      const updated = [...watched, vlog.id];
+      setWatched(updated);
+      localStorage.setItem("sce_watched_vlogs", JSON.stringify(updated));
+    }
+  }
+
+  function handleClaim(vlog: any) {
+    if (claimed.includes(vlog.id)) return;
+    const reward = vlog.watchReward || 0;
+    if (reward <= 0) return;
+    const userRaw = localStorage.getItem("sce_current_user");
+    if (!userRaw) {
+      toast.error("Please login to claim reward");
+      return;
+    }
+    const user = JSON.parse(userRaw);
+    user.balance = (user.balance || 0) + reward;
+    user.totalEarned = (user.totalEarned || 0) + reward;
+    localStorage.setItem("sce_current_user", JSON.stringify(user));
+    const users = JSON.parse(localStorage.getItem("sce_users") || "[]");
+    const idx = users.findIndex((u: any) => u.username === user.username);
+    if (idx !== -1) {
+      users[idx] = user;
+      localStorage.setItem("sce_users", JSON.stringify(users));
+    }
+    const updatedClaimed = [...claimed, vlog.id];
+    setClaimed(updatedClaimed);
+    localStorage.setItem(
+      "sce_claimed_vlog_rewards",
+      JSON.stringify(updatedClaimed),
+    );
+    toast.success(`+${reward} USDT credited to your balance!`);
+  }
 
   return (
-    <div className="min-h-screen bg-mesh pt-20">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+    <div className="min-h-screen bg-mesh pt-24 pb-16">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="mb-8"
         >
-          <h1 className="font-display text-4xl font-bold mb-2">
-            Vlog & <span className="text-orange-brand">Promotions</span>
+          <Badge className="bg-gold/10 text-gold border-gold/30 mb-3">
+            Video Content
+          </Badge>
+          <h1 className="font-display text-4xl font-bold gold-gradient mb-2">
+            Vlogs &amp; Videos
           </h1>
-          <p className="text-foreground/50">
-            Daily vlogs, trading sessions, and exclusive deals
+          <p className="text-muted-foreground">
+            Watch videos and earn USDT rewards
           </p>
         </motion.div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
-          <TabsList className="bg-navy-card border border-gold/15">
-            {Object.entries(CATEGORY_LABELS).map(([val, label]) => (
-              <TabsTrigger
-                key={val}
-                value={val}
-                data-ocid={`vlog.${val}.tab`}
-                className="data-[state=active]:bg-gold/10 data-[state=active]:text-gold"
-              >
-                {label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-
-        {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {["v1", "v2", "v3", "v4", "v5", "v6"].map((k) => (
-              <Skeleton key={k} className="h-64 rounded-xl bg-navy-card" />
-            ))}
+        {vlogs.length === 0 ? (
+          <div className="text-center py-24" data-ocid="vlog.empty_state">
+            <div className="w-20 h-20 rounded-full bg-gold/5 border border-gold/20 flex items-center justify-center mx-auto mb-6">
+              <Video className="w-10 h-10 text-gold/30" />
+            </div>
+            <h3 className="font-display text-2xl font-bold text-foreground/50 mb-2">
+              No Vlogs Yet
+            </h3>
+            <p className="text-muted-foreground">
+              Admin will add vlogs soon. Check back later!
+            </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filtered.map((post, i) => {
-              const videoId = getYoutubeId(post.videoUrl);
-              const thumbUrl = videoId
-                ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
-                : post.thumbnailUrl;
-              const catKey = String(post.category);
-              const date = new Date(
-                Number(post.createdAt) / 1000000,
-              ).toLocaleDateString();
-              const isExpanded = expandedVideo === String(post.id);
-
-              return (
-                <motion.div
-                  key={String(post.id)}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  className="glass-card glass-card-hover rounded-xl overflow-hidden transition-all duration-300 flex flex-col"
-                >
-                  <button
-                    type="button"
-                    className="relative aspect-video bg-navy-card cursor-pointer group w-full border-0 p-0"
-                    onClick={() =>
-                      setExpandedVideo(isExpanded ? null : String(post.id))
-                    }
-                  >
-                    {isExpanded && videoId ? (
-                      <iframe
-                        src={`https://www.youtube.com/embed/${videoId}?autoplay=1`}
-                        className="w-full h-full"
-                        allowFullScreen
-                        title={post.title}
-                      />
-                    ) : (
-                      <>
-                        <img
-                          src={thumbUrl}
-                          alt={post.title}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display =
-                              "none";
-                          }}
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/40 group-hover:bg-black/20 transition-colors">
-                          <div className="w-12 h-12 rounded-full bg-gold/90 flex items-center justify-center group-hover:scale-110 transition-transform">
-                            <Play className="w-5 h-5 text-navy ml-0.5" />
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </button>
-                  <div className="p-4 flex-1 flex flex-col">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge
-                        className={`text-xs border ${CATEGORY_COLORS[catKey] || "bg-muted text-foreground/50"}`}
-                      >
-                        {CATEGORY_LABELS[catKey] || catKey}
-                      </Badge>
-                      <span className="text-xs text-foreground/30 flex items-center gap-1 ml-auto">
-                        <Calendar className="w-3 h-3" /> {date}
-                      </span>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {vlogs.map((v: any, i: number) => (
+              <motion.div
+                key={v.id}
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.1 }}
+                data-ocid={`vlog.item.${i + 1}`}
+                className="glass-card glass-card-hover rounded-2xl overflow-hidden"
+              >
+                <div className="aspect-video bg-background/50 relative flex items-center justify-center overflow-hidden">
+                  {v.thumbnailUrl ? (
+                    <img
+                      src={v.thumbnailUrl}
+                      alt={v.title}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-gold/5 to-orange-brand/5 flex items-center justify-center">
+                      <Play className="w-12 h-12 text-gold/30" />
                     </div>
-                    <h3 className="font-semibold text-sm text-foreground leading-snug mb-1 line-clamp-2">
-                      {post.title}
-                    </h3>
-                    <p className="text-xs text-foreground/50 line-clamp-2 flex-1">
-                      {post.description}
+                  )}
+                  <button
+                    onClick={() => handleWatch(v)}
+                    type="button"
+                    className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 hover:opacity-100 transition-opacity"
+                    data-ocid={`vlog.watch_button.${i + 1}`}
+                  >
+                    <div className="w-14 h-14 rounded-full bg-gold/20 border border-gold/40 flex items-center justify-center">
+                      <Play className="w-7 h-7 text-gold ml-1" />
+                    </div>
+                  </button>
+                </div>
+                <div className="p-4">
+                  <h3 className="font-bold text-foreground line-clamp-2 mb-1">
+                    {v.title}
+                  </h3>
+                  {v.description && (
+                    <p className="text-xs text-muted-foreground line-clamp-2">
+                      {v.description}
                     </p>
-                    {post.videoUrl && !videoId && (
-                      <a
-                        href={post.videoUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-3 inline-flex items-center gap-1 text-xs text-gold hover:text-gold/70"
-                      >
-                        <Video className="w-3 h-3" /> Watch Video
-                      </a>
-                    )}
+                  )}
+                  <div className="flex items-center justify-between mt-3">
+                    <span className="text-xs text-muted-foreground">
+                      {v.date}
+                    </span>
+                    {v.watchReward > 0 &&
+                      (claimed.includes(v.id) ? (
+                        <Badge className="bg-gold/10 text-gold border-gold/30 text-xs flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3" /> Claimed{" "}
+                          {v.watchReward} USDT
+                        </Badge>
+                      ) : watched.includes(v.id) ? (
+                        <Button
+                          size="sm"
+                          onClick={() => handleClaim(v)}
+                          data-ocid={`vlog.claim_button.${i + 1}`}
+                          className="bg-gold text-background hover:bg-gold/90 text-xs h-7 px-3"
+                        >
+                          Claim {v.watchReward} USDT
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleWatch(v)}
+                          data-ocid={`vlog.watch_button.${i + 1}`}
+                          className="border-gold/30 text-gold hover:bg-gold/10 text-xs h-7 px-3"
+                        >
+                          Watch &amp; Earn
+                        </Button>
+                      ))}
                   </div>
-                </motion.div>
-              );
-            })}
-          </div>
-        )}
-
-        {!isLoading && filtered.length === 0 && (
-          <div className="text-center py-20">
-            <Tag className="w-12 h-12 mx-auto mb-4 text-foreground/20" />
-            <p className="text-foreground/40">No posts in this category yet.</p>
+                </div>
+              </motion.div>
+            ))}
           </div>
         )}
       </div>

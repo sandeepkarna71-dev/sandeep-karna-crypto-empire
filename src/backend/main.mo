@@ -85,6 +85,31 @@ actor {
     totalDeposited : Nat;
   };
 
+  // Extended user registration data (stored separately to avoid upgrade issues)
+  public type UserRegistrationData = {
+    principalId : Text;
+    username : Text;
+    email : Text;
+    fullName : Text;
+    joinDate : Int;
+    referralCode : Text;
+    referredBy : ?Text;
+  };
+
+  // Combined user info for admin
+  public type UserInfo = {
+    principalId : Text;
+    username : Text;
+    email : Text;
+    fullName : Text;
+    joinDate : Int;
+    referralCode : Text;
+    referredBy : ?Text;
+    balance : Nat;
+    totalEarned : Nat;
+    totalDeposited : Nat;
+  };
+
   public type DepositRequest = {
     id : Nat;
     userId : Principal;
@@ -145,11 +170,16 @@ actor {
   let ads = Map.empty<Nat, Ad>();
 
   let userAccounts = Map.empty<Principal, UserAccount>();
+  let userRegistrationData = Map.empty<Principal, UserRegistrationData>();
   let depositRequests = Map.empty<Nat, DepositRequest>();
   let withdrawalRequests = Map.empty<Nat, WithdrawalRequest>();
   let earnRecords = Map.empty<Nat, EarnRecord>();
 
   let userProfiles = Map.empty<Principal, UserProfile>();
+
+  // Anonymous user storage (cross-device, no II needed)
+  let usernameUsers = Map.empty<Text, UserRegistrationData>();
+  let usernameBalances = Map.empty<Text, Nat>();
 
   // Authorization System
   let accessControlState = AccessControl.initState();
@@ -405,23 +435,33 @@ actor {
 
   //----------------- User Account Registration -----------------//
 
-  public shared ({ caller }) func registerUser(username : Text, passwordHash : Blob) : async () {
-    // Prevent anonymous principals from registering
+  // Extended registration: stores full user info in canister (shared across all devices)
+  public shared ({ caller }) func registerUserFull(
+    username : Text,
+    passwordHash : Blob,
+    email : Text,
+    fullName : Text,
+    referralCode : Text,
+    referredBy : ?Text,
+  ) : async () {
     if (caller.isAnonymous()) {
       Runtime.trap("Unauthorized: Anonymous users cannot register");
     };
 
-    // Check if account already exists for this principal
     switch (userAccounts.get(caller)) {
       case (?_) { Runtime.trap("Account already exists for this principal") };
       case (null) {
-        // Check if username is already taken
         let usernameTaken = userAccounts.values().toArray().any(
-          func(account) { account.username == username }
+          func(account) { account.username.toLower() == username.toLower() }
         );
-
         if (usernameTaken) {
           Runtime.trap("Username already taken");
+        };
+        let emailTaken = userRegistrationData.values().toArray().any(
+          func(d) { d.email.toLower() == email.toLower() }
+        );
+        if (emailTaken) {
+          Runtime.trap("Email already registered");
         };
 
         let account : UserAccount = {
@@ -431,8 +471,190 @@ actor {
           totalEarned = 0;
           totalDeposited = 0;
         };
-
         userAccounts.add(caller, account);
+
+        let regData : UserRegistrationData = {
+          principalId = caller.toText();
+          username;
+          email;
+          fullName;
+          joinDate = Time.now();
+          referralCode;
+          referredBy;
+        };
+        userRegistrationData.add(caller, regData);
+
+        // Assign user role
+        accessControlState.userRoles.add(caller, #user);
+
+        // Give referral bonus to referrer ($1 = 1 unit)
+        switch (referredBy) {
+          case (null) {};
+          case (?refCode) {
+            let referrerEntry = userRegistrationData.values().toArray().find(
+              func(d) { d.referralCode == refCode }
+            );
+            switch (referrerEntry) {
+              case (null) {};
+              case (?rd) {
+                let referrerPrincipal = Principal.fromText(rd.principalId);
+                switch (userAccounts.get(referrerPrincipal)) {
+                  case (null) {};
+                  case (?refAccount) {
+                    let updated : UserAccount = {
+                      refAccount with
+                      balance = refAccount.balance + 1;
+                      totalEarned = refAccount.totalEarned + 1;
+                    };
+                    userAccounts.add(referrerPrincipal, updated);
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  // Legacy registration (kept for backward compatibility)
+  public shared ({ caller }) func registerUser(username : Text, passwordHash : Blob) : async () {
+    if (caller.isAnonymous()) {
+      Runtime.trap("Unauthorized: Anonymous users cannot register");
+    };
+
+    switch (userAccounts.get(caller)) {
+      case (?_) { Runtime.trap("Account already exists for this principal") };
+      case (null) {
+        let usernameTaken = userAccounts.values().toArray().any(
+          func(account) { account.username == username }
+        );
+        if (usernameTaken) {
+          Runtime.trap("Username already taken");
+        };
+        let account : UserAccount = {
+          username;
+          passwordHash;
+          balance = 0;
+          totalEarned = 0;
+          totalDeposited = 0;
+        };
+        userAccounts.add(caller, account);
+        accessControlState.userRoles.add(caller, #user);
+      };
+    };
+  };
+
+  // Login: find user by username or email, verify passwordHash
+  public query func loginUser(usernameOrEmail : Text, passwordHash : Blob) : async ?UserInfo {
+    // Find by username first
+    let byUsername = userRegistrationData.values().toArray().find(
+      func(d) { d.username.toLower() == usernameOrEmail.toLower() }
+    );
+    let byEmail = userRegistrationData.values().toArray().find(
+      func(d) { d.email.toLower() == usernameOrEmail.toLower() }
+    );
+    let regData = switch (byUsername) {
+      case (?d) { ?d };
+      case (null) { byEmail };
+    };
+    switch (regData) {
+      case (null) { null };
+      case (?rd) {
+        let principal = Principal.fromText(rd.principalId);
+        switch (userAccounts.get(principal)) {
+          case (null) { null };
+          case (?account) {
+            if (account.passwordHash != passwordHash) {
+              null
+            } else {
+              ?{
+                principalId = rd.principalId;
+                username = rd.username;
+                email = rd.email;
+                fullName = rd.fullName;
+                joinDate = rd.joinDate;
+                referralCode = rd.referralCode;
+                referredBy = rd.referredBy;
+                balance = account.balance;
+                totalEarned = account.totalEarned;
+                totalDeposited = account.totalDeposited;
+              }
+            }
+          };
+        };
+      };
+    };
+  };
+
+  // Get all users for admin dashboard
+  public query ({ caller }) func getAllUsers() : async [UserInfo] {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can view all users");
+    };
+    userRegistrationData.values().toArray().map(
+      func(rd) {
+        let principal = Principal.fromText(rd.principalId);
+        let (bal, earned, deposited) = switch (userAccounts.get(principal)) {
+          case (null) { (0, 0, 0) };
+          case (?acc) { (acc.balance, acc.totalEarned, acc.totalDeposited) };
+        };
+        {
+          principalId = rd.principalId;
+          username = rd.username;
+          email = rd.email;
+          fullName = rd.fullName;
+          joinDate = rd.joinDate;
+          referralCode = rd.referralCode;
+          referredBy = rd.referredBy;
+          balance = bal;
+          totalEarned = earned;
+          totalDeposited = deposited;
+        }
+      }
+    );
+  };
+
+  // Get current user's full info
+  public query ({ caller }) func getMyUserInfo() : async ?UserInfo {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can view their own info");
+    };
+    switch (userRegistrationData.get(caller)) {
+      case (null) { null };
+      case (?rd) {
+        switch (userAccounts.get(caller)) {
+          case (null) { null };
+          case (?acc) {
+            ?{
+              principalId = rd.principalId;
+              username = rd.username;
+              email = rd.email;
+              fullName = rd.fullName;
+              joinDate = rd.joinDate;
+              referralCode = rd.referralCode;
+              referredBy = rd.referredBy;
+              balance = acc.balance;
+              totalEarned = acc.totalEarned;
+              totalDeposited = acc.totalDeposited;
+            }
+          };
+        };
+      };
+    };
+  };
+
+  // Admin: update user balance manually
+  public shared ({ caller }) func adminUpdateUserBalance(principalId : Text, newBalance : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can update balances");
+    };
+    let target = Principal.fromText(principalId);
+    switch (userAccounts.get(target)) {
+      case (null) { Runtime.trap("User not found") };
+      case (?account) {
+        let updated : UserAccount = { account with balance = newBalance };
+        userAccounts.add(target, updated);
       };
     };
   };
@@ -456,7 +678,6 @@ actor {
       Runtime.trap("Unauthorized: Only users can submit deposit requests");
     };
 
-    // Validate user account and verify username matches
     switch (userAccounts.get(caller)) {
       case (null) { Runtime.trap("User account not found") };
       case (?account) {
@@ -507,6 +728,13 @@ actor {
     );
   };
 
+  public query ({ caller }) func getAllDeposits() : async [DepositRequest] {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can view all deposits");
+    };
+    depositRequests.values().toArray();
+  };
+
   public shared ({ caller }) func approveDeposit(id : Nat) : async () {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can approve deposits");
@@ -519,13 +747,11 @@ actor {
           Runtime.trap("Deposit request already processed");
         };
 
-        // Convert amount to Nat
         let amountNat = switch (Nat.fromText(request.amount)) {
           case (null) { Runtime.trap("Invalid amount format") };
           case (?n) { n };
         };
 
-        // Update status
         let updated : DepositRequest = {
           request with
           status = #approved;
@@ -533,19 +759,14 @@ actor {
         };
         depositRequests.add(id, updated);
 
-        // Update user account balance
         switch (userAccounts.get(request.userId)) {
           case (null) { Runtime.trap("User account not found") };
           case (?account) {
-            let newBalance = account.balance + amountNat;
-            let newTotalDeposited = account.totalDeposited + amountNat;
-
             let updatedAccount : UserAccount = {
               account with
-              balance = newBalance;
-              totalDeposited = newTotalDeposited;
+              balance = account.balance + amountNat;
+              totalDeposited = account.totalDeposited + amountNat;
             };
-
             userAccounts.add(request.userId, updatedAccount);
           };
         };
@@ -564,7 +785,6 @@ actor {
         if (request.status != #pending) {
           Runtime.trap("Deposit request already processed");
         };
-
         let updated : DepositRequest = {
           request with
           status = #rejected;
@@ -587,14 +807,12 @@ actor {
       Runtime.trap("Unauthorized: Only users can submit withdrawal requests");
     };
 
-    // Validate user account and verify username matches
     switch (userAccounts.get(caller)) {
       case (null) { Runtime.trap("User account not found") };
       case (?account) {
         if (account.username != username) {
           Runtime.trap("Username does not match caller's account");
         };
-
         if (amount < 10000) {
           Runtime.trap("Invalid amount, checkout withdrawal requirements");
         };
@@ -602,12 +820,8 @@ actor {
           Runtime.trap("Insufficient balance for withdrawal");
         };
 
-        // Deduct from balance immediately
-        let newBalance = account.balance - amount;
-        let updatedAccount : UserAccount = {
-          account with balance = newBalance;
-        };
-        userAccounts.add(caller, updatedAccount);
+        let newBalance = if (account.balance >= amount) { account.balance - amount } else { 0 };
+        userAccounts.add(caller, { account with balance = newBalance });
 
         let request : WithdrawalRequest = {
           id = nextWithdrawalId;
@@ -620,7 +834,6 @@ actor {
           createdAt = Time.now();
           reviewedAt = 0;
         };
-
         withdrawalRequests.add(nextWithdrawalId, request);
         nextWithdrawalId += 1;
       };
@@ -646,10 +859,16 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can get pending withdrawals");
     };
-
     withdrawalRequests.values().toArray().filter(
       func(r) { r.status == #pending }
     );
+  };
+
+  public query ({ caller }) func getAllWithdrawals() : async [WithdrawalRequest] {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can view all withdrawals");
+    };
+    withdrawalRequests.values().toArray();
   };
 
   public shared ({ caller }) func approveWithdrawal(id : Nat) : async () {
@@ -663,7 +882,6 @@ actor {
         if (request.status != #pending) {
           Runtime.trap("Withdrawal request already processed");
         };
-
         let updated : WithdrawalRequest = {
           request with
           status = #approved;
@@ -685,7 +903,6 @@ actor {
         if (request.status != #pending) {
           Runtime.trap("Withdrawal request already processed");
         };
-
         let updated : WithdrawalRequest = {
           request with
           status = #rejected;
@@ -693,15 +910,10 @@ actor {
         };
         withdrawalRequests.add(id, updated);
 
-        // Refund balance
         switch (userAccounts.get(request.userId)) {
           case (null) { Runtime.trap("User account not found") };
           case (?account) {
-            let newBalance = account.balance + request.amount;
-            let updatedAccount : UserAccount = {
-              account with balance = newBalance;
-            };
-            userAccounts.add(request.userId, updatedAccount);
+            userAccounts.add(request.userId, { account with balance = account.balance + request.amount });
           };
         };
       };
@@ -718,7 +930,6 @@ actor {
       Runtime.trap("Unauthorized: Only users can claim earnings");
     };
 
-    // Validate user account and verify username matches
     switch (userAccounts.get(caller)) {
       case (null) { Runtime.trap("User account not found") };
       case (?account) {
@@ -726,26 +937,20 @@ actor {
           Runtime.trap("Username does not match caller's account");
         };
 
-        // Check if this is a valid vlog video
         switch (vlogPosts.get(videoId)) {
           case (null) { Runtime.trap("Vlog post not found") };
           case (?post) {
-            // Only allow for vlog category
             if (post.category != #vlog) {
               Runtime.trap("Only vlog videos can be claimed");
             };
-
-            // Check if user already claimed this video
             let alreadyClaimed = earnRecords.values().toArray().any(
               func(r) {
                 r.userId == caller and r.taskType == #watchVideo and r.contentId == videoId.toText()
               }
             );
-
             if (alreadyClaimed) {
               Runtime.trap("Already claimed this video");
             };
-
             let earnRecord : EarnRecord = {
               id = nextEarnId;
               userId = caller;
@@ -756,7 +961,6 @@ actor {
               status = #pending;
               createdAt = Time.now();
             };
-
             earnRecords.add(nextEarnId, earnRecord);
             nextEarnId += 1;
           };
@@ -773,25 +977,20 @@ actor {
       Runtime.trap("Unauthorized: Only users can claim earnings");
     };
 
-    // Validate user account and verify username matches
     switch (userAccounts.get(caller)) {
       case (null) { Runtime.trap("User account not found") };
       case (?account) {
         if (account.username != username) {
           Runtime.trap("Username does not match caller's account");
         };
-
-        // Check if user already claimed this article
         let alreadyClaimed = earnRecords.values().toArray().any(
           func(r) {
             r.userId == caller and r.taskType == #writeArticle and r.contentId == articleTitle
           }
         );
-
         if (alreadyClaimed) {
           Runtime.trap("Already claimed this article");
         };
-
         let earnRecord : EarnRecord = {
           id = nextEarnId;
           userId = caller;
@@ -802,7 +1001,6 @@ actor {
           status = #pending;
           createdAt = Time.now();
         };
-
         earnRecords.add(nextEarnId, earnRecord);
         nextEarnId += 1;
       };
@@ -813,7 +1011,6 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only users can view earn history");
     };
-
     switch (userAccounts.get(caller)) {
       case (null) { Runtime.trap("User account not found") };
       case (?_) {
@@ -828,7 +1025,6 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can get pending earn records");
     };
-
     earnRecords.values().toArray().filter(
       func(r) { r.status == #pending }
     );
@@ -845,26 +1041,15 @@ actor {
         if (record.status != #pending) {
           Runtime.trap("Earn record already processed");
         };
-
-        let updated : EarnRecord = {
-          record with status = #approved
-        };
-        earnRecords.add(id, updated);
-
-        // Add to user balance
+        earnRecords.add(id, { record with status = #approved });
         switch (userAccounts.get(record.userId)) {
           case (null) { Runtime.trap("User account not found") };
           case (?account) {
-            let newBalance = account.balance + record.amount;
-            let newTotalEarned = account.totalEarned + record.amount;
-
-            let updatedAccount : UserAccount = {
+            userAccounts.add(record.userId, {
               account with
-              balance = newBalance;
-              totalEarned = newTotalEarned;
-            };
-
-            userAccounts.add(record.userId, updatedAccount);
+              balance = account.balance + record.amount;
+              totalEarned = account.totalEarned + record.amount;
+            });
           };
         };
       };
@@ -875,18 +1060,13 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
       Runtime.trap("Unauthorized: Only admins can reject earn records");
     };
-
     switch (earnRecords.get(id)) {
       case (null) { Runtime.trap("Earn record not found") };
       case (?record) {
         if (record.status != #pending) {
           Runtime.trap("Earn record already processed");
         };
-
-        let updated : EarnRecord = {
-          record with status = #rejected
-        };
-        earnRecords.add(id, updated);
+        earnRecords.add(id, { record with status = #rejected });
       };
     };
   };
@@ -898,27 +1078,20 @@ actor {
       Runtime.trap("Unauthorized: Only admins can get stats");
     };
 
-    let totalUsers = userAccounts.size();
+    let totalUsers = userRegistrationData.size();
     let totalPendingDeposits = depositRequests.values().toArray().filter(
       func(r) { r.status == #pending }
     ).size();
-
     let totalPendingWithdrawals = withdrawalRequests.values().toArray().filter(
       func(r) { r.status == #pending }
     ).size();
-
     let totalPendingEarnRecords = earnRecords.values().toArray().filter(
       func(r) { r.status == #pending }
     ).size();
-
-    // Calculate total platform balance (all user balances)
     var totalPlatformBalance = 0;
     userAccounts.values().forEach(
-      func(account) {
-        totalPlatformBalance += account.balance;
-      }
+      func(account) { totalPlatformBalance += account.balance }
     );
-
     {
       totalUsers;
       totalPendingDeposits;
@@ -938,7 +1111,6 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only users can fetch crypto prices");
     };
-
     await OutCall.httpGetRequest(
       "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1",
       [],
@@ -950,12 +1122,148 @@ actor {
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only users can fetch world news");
     };
-
     await OutCall.httpGetRequest(
       "https://gnews.io/api/v4/top-headlines?category=general&lang=en&max=20&apikey=demo",
       [],
       transform,
     );
   };
-};
 
+  // ============================================================
+  // PUBLIC (ANONYMOUS-FRIENDLY) FUNCTIONS FOR CROSS-DEVICE SYNC
+  // ============================================================
+
+  public shared func registerUserPublic(
+    username : Text,
+    email : Text,
+    fullName : Text,
+    joinDate : Int,
+    referralCode : Text,
+    referredBy : ?Text,
+  ) : async () {
+    let takenInAnon = usernameUsers.values().toArray().any(
+      func(d : UserRegistrationData) : Bool { d.username == username }
+    );
+    if (takenInAnon) { Runtime.trap("Username already taken") };
+    let takenInPrincipal = userRegistrationData.values().toArray().any(
+      func(d : UserRegistrationData) : Bool { d.username == username }
+    );
+    if (takenInPrincipal) { Runtime.trap("Username already taken") };
+    let rd : UserRegistrationData = {
+      principalId = "anon"; username; email; fullName; joinDate; referralCode; referredBy;
+    };
+    usernameUsers.add(username, rd);
+    usernameBalances.add(username, 0);
+    switch (referredBy) {
+      case (null) {};
+      case (?refCode) {
+        let referrerEntry = usernameUsers.values().toArray().find(
+          func(d : UserRegistrationData) : Bool { d.referralCode == refCode }
+        );
+        switch (referrerEntry) {
+          case (null) {};
+          case (?ref) {
+            let cur = switch (usernameBalances.get(ref.username)) { case (null) { 0 }; case (?b) { b } };
+            usernameBalances.add(ref.username, cur + 1000);
+          };
+        };
+      };
+    };
+  };
+
+  public query func getAllUsersPublic() : async [UserInfo] {
+    usernameUsers.values().toArray().map(func(rd : UserRegistrationData) : UserInfo {
+      let bal = switch (usernameBalances.get(rd.username)) { case (null) { 0 }; case (?b) { b } };
+      { principalId = rd.principalId; username = rd.username; email = rd.email;
+        fullName = rd.fullName; joinDate = rd.joinDate; referralCode = rd.referralCode;
+        referredBy = rd.referredBy; balance = bal; totalEarned = 0; totalDeposited = 0; }
+    })
+  };
+
+  public shared func submitDepositPublic(username : Text, currency : Text, amount : Text, txHash : Text) : async () {
+    let request : DepositRequest = {
+      id = nextDepositId; userId = Principal.fromText("2vxsx-fae");
+      username; currency; amount; txHash; status = #pending;
+      createdAt = Time.now(); reviewedAt = 0;
+    };
+    depositRequests.add(nextDepositId, request);
+    nextDepositId += 1;
+  };
+
+  public shared func submitWithdrawalPublic(username : Text, amount : Nat, currency : Text, walletAddress : Text) : async () {
+    let request : WithdrawalRequest = {
+      id = nextWithdrawalId; userId = Principal.fromText("2vxsx-fae");
+      username; amount; currency; walletAddress; status = #pending;
+      createdAt = Time.now(); reviewedAt = 0;
+    };
+    withdrawalRequests.add(nextWithdrawalId, request);
+    nextWithdrawalId += 1;
+  };
+
+  public query func getAllDepositsPublic() : async [DepositRequest] {
+    depositRequests.values().toArray()
+  };
+
+  public query func getAllWithdrawalsPublic() : async [WithdrawalRequest] {
+    withdrawalRequests.values().toArray()
+  };
+
+  public shared func approveDepositAdmin(id : Nat, adminPw : Text) : async () {
+    if (adminPw != "Sandeep@321") { Runtime.trap("Invalid admin credentials") };
+    switch (depositRequests.get(id)) {
+      case (null) { Runtime.trap("Deposit request not found") };
+      case (?request) {
+        if (not (request.status == #pending)) { Runtime.trap("Already processed") };
+        depositRequests.add(id, { request with status = #approved; reviewedAt = Time.now() });
+        let amountNat = switch (Nat.fromText(request.amount)) { case (null) { 0 }; case (?n) { n } };
+        let cur = switch (usernameBalances.get(request.username)) { case (null) { 0 }; case (?b) { b } };
+        usernameBalances.add(request.username, cur + amountNat);
+        switch (userAccounts.get(request.userId)) {
+          case (null) {};
+          case (?account) {
+            userAccounts.add(request.userId, { account with balance = account.balance + amountNat; totalDeposited = account.totalDeposited + amountNat });
+          };
+        };
+      };
+    };
+  };
+
+  public shared func rejectDepositAdmin(id : Nat, adminPw : Text) : async () {
+    if (adminPw != "Sandeep@321") { Runtime.trap("Invalid admin credentials") };
+    switch (depositRequests.get(id)) {
+      case (null) { Runtime.trap("Deposit request not found") };
+      case (?request) {
+        depositRequests.add(id, { request with status = #rejected; reviewedAt = Time.now() });
+      };
+    };
+  };
+
+  public shared func approveWithdrawalAdmin(id : Nat, adminPw : Text) : async () {
+    if (adminPw != "Sandeep@321") { Runtime.trap("Invalid admin credentials") };
+    switch (withdrawalRequests.get(id)) {
+      case (null) { Runtime.trap("Withdrawal request not found") };
+      case (?request) {
+        if (not (request.status == #pending)) { Runtime.trap("Already processed") };
+        withdrawalRequests.add(id, { request with status = #approved; reviewedAt = Time.now() });
+      };
+    };
+  };
+
+  public shared func rejectWithdrawalAdmin(id : Nat, adminPw : Text) : async () {
+    if (adminPw != "Sandeep@321") { Runtime.trap("Invalid admin credentials") };
+    switch (withdrawalRequests.get(id)) {
+      case (null) { Runtime.trap("Withdrawal request not found") };
+      case (?request) {
+        withdrawalRequests.add(id, { request with status = #rejected; reviewedAt = Time.now() });
+        let cur = switch (usernameBalances.get(request.username)) { case (null) { 0 }; case (?b) { b } };
+        usernameBalances.add(request.username, cur + request.amount);
+      };
+    };
+  };
+
+  public query func getUserBalancePublic(username : Text) : async Nat {
+    switch (usernameBalances.get(username)) { case (null) { 0 }; case (?b) { b } };
+  };
+
+
+};

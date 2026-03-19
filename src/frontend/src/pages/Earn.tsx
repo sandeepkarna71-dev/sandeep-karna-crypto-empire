@@ -1,441 +1,698 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import {
-  BookOpen,
+  Award,
+  BarChart2,
   CheckCircle,
-  Clock,
+  Coins,
+  Crown,
+  ExternalLink,
+  Flame,
   Gift,
   Loader2,
   Play,
+  RefreshCw,
   Star,
+  TrendingUp,
   Users,
+  Zap,
 } from "lucide-react";
-import { motion } from "motion/react";
-import { useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
-import { useActor } from "../hooks/useActor";
 
-const VIDEOS = [
-  {
-    id: 1,
-    title: "Introduction to Crypto Trading",
-    duration: "12:30",
-    reward: 0.1,
-  },
-  {
-    id: 2,
-    title: "Bitcoin Price Analysis 2026",
-    duration: "18:45",
-    reward: 0.1,
-  },
-  { id: 3, title: "Altcoin Season Strategies", duration: "15:20", reward: 0.1 },
-  { id: 4, title: "DeFi Yield Farming Guide", duration: "22:10", reward: 0.1 },
-  {
-    id: 5,
-    title: "Risk Management in Trading",
-    duration: "10:55",
-    reward: 0.1,
-  },
-];
+function getDailyLimit(): number {
+  try {
+    const s = JSON.parse(localStorage.getItem("sce_admin_settings") || "{}");
+    return Number(s.dailyLimit) || 500;
+  } catch {
+    return 500;
+  }
+}
 
-function getTodayKey() {
+function getTodayDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function loadLS<T>(key: string, def: T): T {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null") ?? def;
+  } catch {
+    return def;
+  }
+}
+
+function saveLS(key: string, value: unknown) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+type AdminTask = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  adUrl: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  audioUrl?: string;
+  steps: string[];
+  reward: number;
+  date: string;
+};
+
 export function Earn() {
-  const { user, isLoggedIn } = useAuth();
-  const { actor } = useActor();
-  const [articleContent, setArticleContent] = useState("");
-  const [articleTitle, setArticleTitle] = useState("");
-  const [submittingArticle, setSubmittingArticle] = useState(false);
-  const [claimingVideo, setClaimingVideo] = useState<number | null>(null);
-  const [claimingLogin, setClaimingLogin] = useState(false);
+  const { user, isLoggedIn, updateUser } = useAuth();
+  const username = user?.username || "";
+  const today = getTodayDate();
 
-  const todayKey = getTodayKey();
-  const earnData = (() => {
-    try {
-      return JSON.parse(
-        localStorage.getItem(`sce_earn_${user?.username || ""}`) || "{}",
-      );
-    } catch {
-      return {};
-    }
-  })();
+  const dailyEarnKey = `sce_daily_earn_${username}_${today}`;
+  const [dailyEarned, setDailyEarned] = useState<number>(() =>
+    loadLS<number>(dailyEarnKey, 0),
+  );
 
-  function saveEarnData(data: object) {
-    localStorage.setItem(
-      `sce_earn_${user?.username || ""}`,
-      JSON.stringify(data),
-    );
-  }
+  const completedKey = `sce_completed_${username}_${today}`;
+  const [completed, setCompleted] = useState<string[]>(() =>
+    loadLS<string[]>(completedKey, []),
+  );
 
-  const watchedKey = `watched_${todayKey}`;
-  const loginKey = `login_${todayKey}`;
-  const watchedToday: number[] = earnData[watchedKey] || [];
-  const loginClaimedToday: boolean = earnData[loginKey] || false;
-  const articlesSubmitted: number = earnData.articles || 0;
-  const pendingEarnings: number = earnData.pending || 0;
+  const spinKey = `sce_spin_${username}_${today}`;
+  const [spinUsed, setSpinUsed] = useState<boolean>(() =>
+    loadLS<boolean>(spinKey, false),
+  );
+  const [spinning, setSpinning] = useState(false);
+  const [spinResult, setSpinResult] = useState<number | null>(null);
 
-  async function claimLoginBonus() {
-    if (!isLoggedIn) {
-      toast.error("Please login first.");
-      return;
-    }
-    if (loginClaimedToday) {
-      toast.info("Already claimed today!");
-      return;
-    }
-    setClaimingLogin(true);
-    try {
-      await new Promise((r) => setTimeout(r, 800));
-      const updated: Record<string, unknown> = {
-        ...earnData,
-        pending: pendingEarnings + 0.1,
-      };
-      updated[loginKey] = true;
-      saveEarnData(updated);
-      toast.success("+$0.10 Daily login bonus added to pending earnings!");
-    } finally {
-      setClaimingLogin(false);
-    }
-  }
+  const [claimingTask, setClaimingTask] = useState<string | null>(null);
+  const [adminTasks, setAdminTasks] = useState<AdminTask[]>([]);
+  const [taskStepsDone, setTaskStepsDone] = useState<Record<string, string[]>>(
+    {},
+  );
+  const [activeCategory, setActiveCategory] = useState<string>("All");
 
-  async function watchVideo(videoId: number) {
-    if (!isLoggedIn) {
-      toast.error("Please login first.");
-      return;
-    }
-    if (watchedToday.includes(videoId)) {
-      toast.info("Already watched today!");
-      return;
-    }
-    setClaimingVideo(videoId);
-    try {
-      await new Promise((r) => setTimeout(r, 1200));
-      if (actor) {
-        try {
-          await actor.claimEarnForVideo(user!.username, BigInt(videoId));
-        } catch {
-          /* ignore */
-        }
+  useEffect(() => {
+    const tasks = loadLS<AdminTask[]>("sce_admin_tasks", []);
+    setAdminTasks(tasks);
+  }, []);
+
+  const DAILY_LIMIT = getDailyLimit();
+  const dailyPct = Math.min((dailyEarned / DAILY_LIMIT) * 100, 100);
+  const limitReached = dailyEarned >= DAILY_LIMIT;
+
+  const addDailyEarning = useCallback(
+    (amount: number): boolean => {
+      const limit = getDailyLimit();
+      const current = loadLS<number>(dailyEarnKey, 0);
+      if (current >= limit) {
+        toast.error(
+          `Daily limit of $${limit} USDT reached! Come back tomorrow.`,
+        );
+        return false;
       }
-      const newWatched = [...watchedToday, videoId];
-      const updated: Record<string, unknown> = {
-        ...earnData,
-        pending: pendingEarnings + 0.1,
-      };
-      updated[watchedKey] = newWatched;
-      saveEarnData(updated);
-      toast.success("+$0.10 Watch reward added to pending earnings!");
-    } finally {
-      setClaimingVideo(null);
-    }
-  }
-
-  async function submitArticle(e: React.FormEvent) {
-    e.preventDefault();
-    if (!isLoggedIn) {
-      toast.error("Please login first.");
-      return;
-    }
-    if (!articleTitle.trim()) {
-      toast.error("Please enter article title.");
-      return;
-    }
-    if (articleContent.trim().split(/\s+/).length < 100) {
-      toast.error("Article must be at least 100 words.");
-      return;
-    }
-    setSubmittingArticle(true);
-    try {
-      await new Promise((r) => setTimeout(r, 1000));
-      if (actor) {
-        try {
-          await actor.claimEarnForArticle(user!.username, articleTitle.trim());
-        } catch {
-          /* ignore */
-        }
-      }
-      saveEarnData({
-        ...earnData,
-        articles: articlesSubmitted + 1,
-        pending: pendingEarnings + 0.5,
+      const capped = Math.min(amount, limit - current);
+      const newTotal = current + capped;
+      saveLS(dailyEarnKey, newTotal);
+      setDailyEarned(newTotal);
+      if (!user) return false;
+      updateUser({
+        balance: (user.balance || 0) + capped,
+        totalEarned: (user.totalEarned || 0) + capped,
       });
-      setArticleTitle("");
-      setArticleContent("");
-      toast.success("+$0.50 Article submitted! Pending admin approval.");
-    } finally {
-      setSubmittingArticle(false);
+      return true;
+    },
+    [dailyEarnKey, user, updateUser],
+  );
+
+  const markCompleted = useCallback(
+    (taskId: string) => {
+      setCompleted((prev) => {
+        const updated = [...prev, taskId];
+        saveLS(completedKey, updated);
+        return updated;
+      });
+    },
+    [completedKey],
+  );
+
+  async function handleSpin() {
+    if (!isLoggedIn) {
+      toast.error("Please login first.");
+      return;
     }
+    if (spinUsed) {
+      toast.info("Spin already used today!");
+      return;
+    }
+    if (limitReached) {
+      toast.error("Daily limit reached!");
+      return;
+    }
+    setSpinning(true);
+    setSpinResult(null);
+    await new Promise((r) => setTimeout(r, 2000));
+    const reward = Math.round((Math.random() * 0.9 + 0.1) * 100) / 100;
+    setSpinResult(reward);
+    saveLS(spinKey, true);
+    setSpinUsed(true);
+    setSpinning(false);
+    const ok = addDailyEarning(reward);
+    if (ok) toast.success(`🎉 Daily Spin: +$${reward.toFixed(2)} USDT added!`);
   }
 
-  const totalEarned = user?.totalEarned || 0;
+  const categories = [
+    "All",
+    ...Array.from(
+      new Set(adminTasks.map((t) => t.category || "General").filter(Boolean)),
+    ),
+  ];
+  const filteredTasks =
+    activeCategory === "All"
+      ? adminTasks
+      : adminTasks.filter((t) => (t.category || "General") === activeCategory);
+
+  const streak: number = (() => {
+    let s = 0;
+    const now = new Date();
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const key = `sce_daily_earn_${username}_${d.toISOString().slice(0, 10)}`;
+      if (loadLS<number>(key, 0) > 0) s++;
+      else break;
+    }
+    return s;
+  })();
 
   return (
     <div className="min-h-screen bg-mesh pt-20 pb-16">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
+          className="mb-6"
         >
           <Badge className="bg-gold/10 text-gold border-gold/30 mb-3">
-            Earn & Rewards
+            Earn &amp; Rewards
           </Badge>
-          <h1 className="font-display text-4xl font-bold gold-gradient mb-2">
-            Daily Earning Tasks
+          <h1 className="font-display text-4xl font-bold gold-gradient mb-1">
+            Daily Earn Center
           </h1>
           <p className="text-muted-foreground">
-            Complete tasks to earn USDT. Minimum withdrawal: $10
+            Complete tasks added by admin to earn USDT rewards
           </p>
         </motion.div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {[
-            {
-              label: "Total Earned",
-              value: `$${totalEarned.toFixed(2)}`,
-              icon: Star,
-            },
-            {
-              label: "Pending",
-              value: `$${pendingEarnings.toFixed(2)}`,
-              icon: Clock,
-            },
-            { label: "Videos Watched", value: watchedToday.length, icon: Play },
-            {
-              label: "Articles Written",
-              value: articlesSubmitted,
-              icon: BookOpen,
-            },
-          ].map((s) => {
-            const Icon = s.icon;
-            return (
-              <div
-                key={s.label}
-                className="glass-card rounded-xl p-4 text-center"
-              >
-                <Icon className="w-5 h-5 text-gold mx-auto mb-2" />
-                <div className="font-display font-bold text-lg text-gold">
-                  {s.value}
-                </div>
-                <div className="text-xs text-muted-foreground">{s.label}</div>
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <div className="lg:col-span-3 space-y-6">
+            {/* Daily Progress */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              data-ocid="earn.daily_progress"
+              className="glass-card rounded-2xl p-5"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-display font-bold text-foreground">
+                  Daily Earnings
+                </span>
+                <span
+                  className={`font-bold text-sm ${limitReached ? "text-red-400" : "text-green-400"}`}
+                >
+                  ${dailyEarned.toFixed(2)} / ${DAILY_LIMIT}.00 USDT
+                </span>
               </div>
-            );
-          })}
-        </div>
+              <Progress value={dailyPct} className="h-3 bg-background/50" />
+              {limitReached ? (
+                <p className="text-xs text-red-400 mt-2 font-medium">
+                  🚫 Daily limit reached. Come back tomorrow!
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-2">
+                  ${(DAILY_LIMIT - dailyEarned).toFixed(2)} remaining today
+                </p>
+              )}
+            </motion.div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-5">
-            {/* Daily Login Bonus */}
-            <div className="glass-card rounded-2xl p-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center">
-                    <Gift className="w-5 h-5 text-gold" />
-                  </div>
-                  <div>
-                    <div className="font-bold text-foreground">
-                      Daily Login Bonus
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Claim once every day
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-green-400 font-bold">+$0.10</span>
-                  {loginClaimedToday ? (
-                    <Badge className="bg-green-500/10 text-green-400 border-green-500/30">
-                      <CheckCircle className="w-3 h-3 mr-1" /> Claimed
-                    </Badge>
-                  ) : (
-                    <Button
-                      data-ocid="earn.primary_button"
-                      size="sm"
-                      onClick={claimLoginBonus}
-                      disabled={claimingLogin}
-                      className="bg-gold/10 border border-gold/30 text-gold hover:bg-gold/20 text-xs"
-                    >
-                      {claimingLogin ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        "Claim"
-                      )}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Watch Videos */}
-            <div className="glass-card rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Play className="w-5 h-5 text-gold" />
-                <h3 className="font-display font-bold text-foreground">
-                  Watch to Earn
-                </h3>
+            {/* Daily Spin */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="glass-card rounded-2xl p-6 text-center"
+            >
+              <div className="flex items-center gap-2 justify-center mb-4">
+                <RefreshCw className="w-5 h-5 text-gold" />
+                <h2 className="font-display font-bold text-xl text-foreground">
+                  Daily Spin
+                </h2>
                 <Badge className="bg-gold/10 text-gold border-gold/20 text-xs">
-                  $0.10/video
+                  Once per day
                 </Badge>
               </div>
-              <div className="space-y-3">
-                {VIDEOS.map((v) => {
-                  const watched = watchedToday.includes(v.id);
-                  return (
-                    <div
-                      key={v.id}
-                      data-ocid={`earn.item.${v.id}`}
-                      className="flex items-center justify-between py-2 border-b border-border/20"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-background/50 flex items-center justify-center">
-                          <Play className="w-3.5 h-3.5 text-muted-foreground" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium text-foreground">
-                            {v.title}
+              <p className="text-sm text-muted-foreground mb-6">
+                Spin once daily for a random reward of $0.10 – $1.00 USDT
+              </p>
+              <div className="flex justify-center mb-6">
+                <motion.div
+                  animate={{ rotate: spinning ? 1440 : 0 }}
+                  transition={{ duration: 2, ease: "easeOut" }}
+                  className="relative w-32 h-32"
+                >
+                  <div className="w-full h-full rounded-full border-4 border-gold/40 bg-gradient-to-br from-gold/20 to-orange-brand/20 flex items-center justify-center shadow-[0_0_30px_rgba(255,182,0,0.2)]">
+                    <AnimatePresence mode="wait">
+                      {spinResult !== null && !spinning ? (
+                        <motion.div
+                          key="result"
+                          initial={{ scale: 0, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="text-center"
+                        >
+                          <div className="text-gold font-display font-bold text-xl">
+                            +${spinResult.toFixed(2)}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {v.duration}
+                            USDT
                           </div>
+                        </motion.div>
+                      ) : (
+                        <motion.div key="icon">
+                          <Gift className="w-12 h-12 text-gold/60" />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  {[0, 60, 120, 180, 240, 300].map((deg) => (
+                    <div
+                      key={deg}
+                      style={{
+                        transform: `rotate(${deg}deg) translateY(-60px)`,
+                      }}
+                      className="absolute top-1/2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-gold/50"
+                    />
+                  ))}
+                </motion.div>
+              </div>
+              {spinUsed ? (
+                <div className="flex items-center justify-center gap-2 text-green-400 text-sm font-medium">
+                  <CheckCircle className="w-4 h-4" /> Spin used today. Come back
+                  tomorrow!
+                </div>
+              ) : (
+                <Button
+                  data-ocid="earn.spin_button"
+                  onClick={handleSpin}
+                  disabled={spinning || limitReached || !isLoggedIn}
+                  size="lg"
+                  className="bg-gradient-to-r from-gold to-orange-brand text-navy font-bold h-12 px-8 hover:opacity-90"
+                >
+                  {spinning ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />{" "}
+                      Spinning...
+                    </>
+                  ) : (
+                    "🎰 Spin Now!"
+                  )}
+                </Button>
+              )}
+            </motion.div>
+
+            {/* Admin Tasks */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className="glass-card rounded-2xl p-5"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <Zap className="w-5 h-5 text-gold" />
+                <h2 className="font-display font-bold text-xl text-foreground">
+                  Tasks
+                </h2>
+                <Badge className="bg-gold/10 text-gold border-gold/20 text-xs">
+                  Complete all steps to claim
+                </Badge>
+              </div>
+
+              {/* Category filter */}
+              {categories.length > 1 && (
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setActiveCategory(cat)}
+                      data-ocid="earn.tab"
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+                        activeCategory === cat
+                          ? "bg-gold/20 border-gold/50 text-gold"
+                          : "border-border/40 text-muted-foreground hover:border-gold/30 hover:text-gold/80"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {filteredTasks.length === 0 ? (
+                <div
+                  data-ocid="earn.empty_state"
+                  className="text-center py-12 text-muted-foreground"
+                >
+                  <Play className="w-12 h-12 mx-auto mb-3 text-gold/20" />
+                  <p className="text-sm font-medium">No tasks available yet.</p>
+                  <p className="text-xs mt-1">
+                    Admin will add tasks soon. Check back daily!
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredTasks.map((task, idx) => {
+                    const taskClaimKey = `admintask_claimed_${task.id}_${today}`;
+                    const alreadyClaimed = completed.includes(taskClaimKey);
+                    const doneSteps = taskStepsDone[task.id] || [];
+                    const allStepsDone =
+                      task.steps.length === 0 ||
+                      doneSteps.length >= task.steps.length;
+                    const isClaimLoading = claimingTask === taskClaimKey;
+                    return (
+                      <div
+                        key={task.id}
+                        data-ocid={
+                          idx < 5 ? `earn.task.item.${idx + 1}` : undefined
+                        }
+                        className="border border-border/30 rounded-xl p-4 bg-background/20"
+                      >
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex-1 min-w-0">
+                            {task.category && (
+                              <span className="text-xs text-gold/70 font-medium uppercase tracking-wide mb-1 block">
+                                {task.category}
+                              </span>
+                            )}
+                            <span className="font-semibold text-foreground text-sm">
+                              {task.title}
+                            </span>
+                            {task.description && (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {task.description}
+                              </p>
+                            )}
+                          </div>
+                          <Badge className="bg-gold/10 text-gold border-gold/20 text-xs shrink-0">
+                            ${task.reward.toFixed(2)} USDT
+                          </Badge>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-green-400 text-sm font-bold">
-                          +${v.reward}
-                        </span>
-                        {watched ? (
-                          <CheckCircle className="w-5 h-5 text-green-400" />
+
+                        {/* Media preview */}
+                        {task.imageUrl && (
+                          <img
+                            src={task.imageUrl}
+                            alt={task.title}
+                            className="w-full max-h-40 object-cover rounded-lg mb-3"
+                          />
+                        )}
+                        {task.videoUrl && (
+                          // biome-ignore lint/a11y/useMediaCaption: user-uploaded content
+                          <video
+                            src={task.videoUrl}
+                            controls
+                            className="w-full max-h-40 rounded-lg mb-3"
+                          />
+                        )}
+                        {(task as AdminTask & { audioUrl?: string })
+                          .audioUrl && (
+                          // biome-ignore lint/a11y/useMediaCaption: user-uploaded content
+                          <audio
+                            src={
+                              (task as AdminTask & { audioUrl?: string })
+                                .audioUrl
+                            }
+                            controls
+                            className="w-full mb-3"
+                          />
+                        )}
+
+                        {task.adUrl && (
+                          <a
+                            href={task.adUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-gold hover:underline mb-3 flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" /> Open Link /
+                            Content
+                          </a>
+                        )}
+
+                        {task.steps.length > 0 && (
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+                            {task.steps.map((step, si) => {
+                              const stepDone = doneSteps.includes(step);
+                              return (
+                                <button
+                                  key={step}
+                                  type="button"
+                                  disabled={
+                                    stepDone || alreadyClaimed || limitReached
+                                  }
+                                  onClick={() => {
+                                    if (!isLoggedIn) {
+                                      toast.error("Please login first.");
+                                      return;
+                                    }
+                                    setTaskStepsDone((prev) => ({
+                                      ...prev,
+                                      [task.id]: [
+                                        ...(prev[task.id] || []),
+                                        step,
+                                      ],
+                                    }));
+                                    toast.success(
+                                      `✅ Step "${step}" marked complete!`,
+                                    );
+                                  }}
+                                  data-ocid={
+                                    si === 0 ? "earn.task.toggle" : undefined
+                                  }
+                                  className={`rounded-lg p-2.5 text-center border text-xs font-semibold transition-all ${
+                                    stepDone
+                                      ? "border-green-500/40 bg-green-500/10 text-green-400"
+                                      : "border-border/40 bg-background/30 text-foreground hover:border-gold/40 hover:bg-gold/5"
+                                  }`}
+                                >
+                                  {stepDone ? (
+                                    <span className="flex items-center justify-center gap-1">
+                                      <CheckCircle className="w-3.5 h-3.5" />{" "}
+                                      {step}
+                                    </span>
+                                  ) : (
+                                    step
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {alreadyClaimed ? (
+                          <div className="flex items-center gap-2 text-green-400 text-xs font-semibold">
+                            <CheckCircle className="w-4 h-4" /> ✓ Reward Claimed
+                          </div>
+                        ) : allStepsDone ? (
+                          <Button
+                            size="sm"
+                            disabled={
+                              isClaimLoading || limitReached || !isLoggedIn
+                            }
+                            onClick={async () => {
+                              if (!isLoggedIn) {
+                                toast.error("Please login first.");
+                                return;
+                              }
+                              setClaimingTask(taskClaimKey);
+                              await new Promise((r) => setTimeout(r, 600));
+                              const ok = addDailyEarning(task.reward);
+                              if (ok) {
+                                markCompleted(taskClaimKey);
+                                toast.success(
+                                  `🎉 +$${task.reward.toFixed(2)} USDT credited to your balance!`,
+                                );
+                              }
+                              setClaimingTask(null);
+                            }}
+                            data-ocid={
+                              idx < 5 ? "earn.task.primary_button" : undefined
+                            }
+                            className="text-xs font-bold w-full bg-gradient-to-r from-gold to-orange-brand text-navy hover:opacity-90 shadow-[0_0_12px_rgba(255,182,0,0.3)]"
+                          >
+                            {isClaimLoading ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />{" "}
+                                Claiming...
+                              </>
+                            ) : (
+                              "🎁 Claim Reward"
+                            )}
+                          </Button>
                         ) : (
                           <Button
-                            data-ocid="earn.primary_button"
                             size="sm"
-                            onClick={() => watchVideo(v.id)}
-                            disabled={claimingVideo === v.id}
-                            className="bg-gold/10 border border-gold/30 text-gold hover:bg-gold/20 text-xs h-7"
+                            variant="outline"
+                            onClick={() => {
+                              toast.info(
+                                "Complete all steps above to unlock the reward!",
+                              );
+                            }}
+                            data-ocid={
+                              idx < 5 ? "earn.task.secondary_button" : undefined
+                            }
+                            className="text-xs font-semibold w-full border-border/40 text-muted-foreground hover:border-gold/40 hover:text-gold/80"
                           >
-                            {claimingVideo === v.id ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              "Watch"
-                            )}
+                            Complete Task
                           </Button>
                         )}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Write Article */}
-            <div className="glass-card rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <BookOpen className="w-5 h-5 text-gold" />
-                <h3 className="font-display font-bold text-foreground">
-                  Write to Earn
-                </h3>
-                <Badge className="bg-gold/10 text-gold border-gold/20 text-xs">
-                  $0.50/article
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Write a 100+ word article about crypto, trading, or markets.
-                Admin reviews and approves.
-              </p>
-              <form onSubmit={submitArticle}>
-                <div className="space-y-3">
-                  <input
-                    type="text"
-                    placeholder="Article title"
-                    data-ocid="earn.input"
-                    value={articleTitle}
-                    onChange={(e) => setArticleTitle(e.target.value)}
-                    className="w-full bg-background/50 border border-border/60 rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-gold/50"
-                  />
-                  <Textarea
-                    placeholder="Write your article here (minimum 100 words)..."
-                    data-ocid="earn.textarea"
-                    value={articleContent}
-                    onChange={(e) => setArticleContent(e.target.value)}
-                    rows={5}
-                    className="bg-background/50 border-border/60 focus:border-gold/50 resize-none"
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      {
-                        articleContent.trim().split(/\s+/).filter(Boolean)
-                          .length
-                      }{" "}
-                      / 100 words
-                    </span>
-                    <Button
-                      type="submit"
-                      data-ocid="earn.submit_button"
-                      disabled={submittingArticle}
-                      className="bg-gradient-to-r from-gold to-orange-brand text-navy font-bold text-sm h-9"
-                    >
-                      {submittingArticle ? (
-                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                      ) : null}
-                      Submit Article
-                    </Button>
-                  </div>
+                    );
+                  })}
                 </div>
-              </form>
-            </div>
+              )}
+            </motion.div>
           </div>
 
           {/* Sidebar */}
-          <div className="space-y-5">
-            <div className="glass-card rounded-2xl p-5">
+          <div className="space-y-4">
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.1 }}
+              className="glass-card rounded-2xl p-5"
+            >
               <h3 className="font-display font-bold text-foreground mb-4">
-                Earning Summary
+                Your Stats
               </h3>
               <div className="space-y-3">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <TrendingUp className="w-3.5 h-3.5" /> Today
+                  </span>
+                  <span className="font-bold text-green-400">
+                    ${dailyEarned.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <Star className="w-3.5 h-3.5" /> Total Earned
+                  </span>
+                  <span className="font-bold text-gold">
+                    ${(user?.totalEarned || 0).toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <CheckCircle className="w-3.5 h-3.5" /> Tasks Done
+                  </span>
+                  <span className="font-bold text-foreground">
+                    {completed.length}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <Flame className="w-3.5 h-3.5 text-orange-brand" /> Streak
+                  </span>
+                  <span className="font-bold text-orange-brand">
+                    {streak} days 🔥
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <Coins className="w-3.5 h-3.5" /> Balance
+                  </span>
+                  <span className="font-bold text-gold">
+                    ${(user?.balance || 0).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            </motion.div>
+
+            {user && (
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.2 }}
+                className="glass-card rounded-2xl p-5"
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <Users className="w-4 h-4 text-gold" />
+                  <h3 className="font-display font-bold text-foreground">
+                    Your Referral
+                  </h3>
+                </div>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Share to earn $1 per referral
+                </p>
+                <div className="bg-background/50 rounded-lg px-3 py-2 font-mono text-base font-bold text-gold text-center tracking-widest border border-gold/20">
+                  {user.referralCode}
+                </div>
+              </motion.div>
+            )}
+
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.3 }}
+              className="glass-card rounded-2xl p-5"
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <BarChart2 className="w-4 h-4 text-gold" />
+                <h3 className="font-display font-bold text-foreground">
+                  Rates
+                </h3>
+              </div>
+              <div className="space-y-2">
                 {[
-                  { label: "Daily Login", amount: "$0.10" },
-                  { label: "Per Video", amount: "$0.10" },
-                  { label: "Per Article", amount: "$0.50" },
-                  { label: "Per Referral", amount: "$5.00" },
-                  { label: "First Deposit", amount: "$2.00" },
-                ].map((item) => (
-                  <div
-                    key={item.label}
-                    className="flex justify-between text-sm"
-                  >
-                    <span className="text-muted-foreground">{item.label}</span>
-                    <span className="text-green-400 font-medium">
-                      {item.amount}
+                  { label: "Daily Spin", val: "$0.10–$1.00" },
+                  { label: "Task Reward", val: "Set by admin" },
+                  { label: "Referral", val: "$1.00" },
+                  { label: "Daily Limit", val: "$500 USDT" },
+                ].map((r) => (
+                  <div key={r.label} className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">{r.label}</span>
+                    <span className="text-green-400 font-semibold">
+                      {r.val}
                     </span>
                   </div>
                 ))}
-                <div className="border-t border-border/30 pt-3 text-xs text-muted-foreground">
-                  Min withdrawal: $10 USDT
-                </div>
               </div>
-            </div>
+              <div className="mt-3 pt-3 border-t border-border/30 text-xs text-muted-foreground">
+                <Award className="w-3.5 h-3.5 inline mr-1 text-gold" />
+                15% platform commission applies
+              </div>
+            </motion.div>
 
-            <div className="glass-card rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <Users className="w-5 h-5 text-gold" />
-                <h3 className="font-display font-bold text-foreground">
-                  Refer & Earn
-                </h3>
-              </div>
-              <p className="text-sm text-muted-foreground mb-3">
-                Earn $5 for every friend you invite who registers.
-              </p>
-              {user && (
-                <div className="bg-background/50 rounded-lg px-3 py-2 font-mono text-lg font-bold text-gold text-center tracking-widest border border-gold/20">
-                  {user.referralCode}
-                </div>
-              )}
-            </div>
+            {!isLoggedIn && (
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.4 }}
+                className="glass-card rounded-2xl p-5 text-center ring-1 ring-gold/20"
+              >
+                <Crown className="w-8 h-8 text-gold mx-auto mb-2" />
+                <p className="text-sm font-medium text-foreground mb-3">
+                  Login to start earning
+                </p>
+                <a href="/login">
+                  <Button
+                    size="sm"
+                    className="bg-gradient-to-r from-gold to-orange-brand text-navy font-bold w-full"
+                  >
+                    Login Now
+                  </Button>
+                </a>
+              </motion.div>
+            )}
           </div>
         </div>
       </div>
